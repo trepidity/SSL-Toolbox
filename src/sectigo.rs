@@ -30,10 +30,10 @@ impl Default for SectigoConfig {
 #[derive(Serialize)]
 struct EnrollRequest {
     #[serde(rename = "certType")]
-    cert_type: i32,
+    cert_type: String,
     csr: String,
     #[serde(rename = "orgId")]
-    org_id: i32,
+    org_id: String,
     term: i32,
 }
 
@@ -53,6 +53,22 @@ struct EnrollResponse {
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct SslProfile {
+    pub id: i32,  // API returns integer
+    pub name: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub description: Option<String>,
+    pub terms: Vec<i32>,
+    #[allow(dead_code)]
+    #[serde(rename = "keyTypes")]
+    pub key_types: Option<serde_json::Value>,  // Complex nested structure, not needed for display
+    #[allow(dead_code)]
+    #[serde(rename = "useSecondaryOrgName")]
+    pub use_secondary_org_name: bool,
 }
 
 fn get_scm_token(config: &SectigoConfig) -> Result<String> {
@@ -82,6 +98,37 @@ fn get_scm_token(config: &SectigoConfig) -> Result<String> {
     Ok(token_res.access_token)
 }
 
+pub fn list_ssl_profiles(config: &SectigoConfig) -> Result<Vec<SslProfile>> {
+    println!("Fetching available SSL certificate types from Sectigo...");
+    let token = get_scm_token(config)?;
+
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let url = format!("{}/api/ssl/v2/types?organizationId={}", config.api_base, config.org_id);
+    
+    let response = client.get(&url)
+        .bearer_auth(&token)
+        .send()
+        .context("Failed to fetch SSL profiles")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_else(|_| "Could not read body".to_string());
+        println!("  Error Status: {}", status);
+        println!("  Error Body: {}", body);
+        return Err(anyhow!("Failed to fetch SSL profiles: {} - {}", status, body));
+    }
+
+    let body_text = response.text().context("Failed to read response body")?;
+    
+    let profiles: Vec<SslProfile> = serde_json::from_str(&body_text)
+        .context(format!("Failed to parse SSL profiles response. Body: {}", body_text))?;
+    
+    Ok(profiles)
+}
+
 fn strip_csr(csr: &str) -> String {
     csr.lines()
         .filter(|line| !line.starts_with("-----"))
@@ -89,7 +136,13 @@ fn strip_csr(csr: &str) -> String {
         .join("")
 }
 
-pub fn enroll_and_collect(config: &SectigoConfig, csr_file: &str, output_cert: &str, description: Option<String>) -> Result<()> {
+pub fn enroll_and_collect(
+    config: &SectigoConfig, 
+    csr_file: &str, 
+    output_cert: &str, 
+    description: Option<String>,
+    product_code: Option<String>
+) -> Result<()> {
     let csr_content = fs::read_to_string(csr_file).context("Failed to read CSR file")?;
     let stripped_csr = strip_csr(&csr_content);
     
@@ -101,8 +154,8 @@ pub fn enroll_and_collect(config: &SectigoConfig, csr_file: &str, output_cert: &
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
 
-    let cert_type = config.product_code.parse::<i32>().context("Invalid product_code (cert_type)")?;
-    let org_id = config.org_id.parse::<i32>().context("Invalid org_id")?;
+    let cert_type = product_code.unwrap_or_else(|| config.product_code.clone());
+    let org_id = config.org_id.clone();
 
     let payload = EnrollRequest {
         cert_type,

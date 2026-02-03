@@ -35,6 +35,8 @@ enum Commands {
         out: String,
         #[arg(short, long)]
         description: Option<String>,
+        #[arg(short, long)]
+        product_code: Option<String>,
     },
     /// Create PFX from key and signed certificate
     Pfx {
@@ -81,9 +83,35 @@ fn execute_command(cmd: Commands) -> Result<()> {
             openssl_utils::generate_key_and_csr(&conf, &key, &csr, &pass)?;
             println!("Success: Generated {} and {}", key, csr);
         }
-        Commands::Submit { csr, out, description } => {
+        Commands::Submit { csr, out, description, product_code } => {
             let config = sectigo::SectigoConfig::default();
-            sectigo::enroll_and_collect(&config, &csr, &out, description)?;
+            
+            // If product_code not provided via CLI and not in env, prompt user to select
+            let selected_code = if product_code.is_none() && std::env::var("SECTIGO_PRODUCT_CODE").is_err() {
+                let profiles = sectigo::list_ssl_profiles(&config)?;
+                
+                if profiles.is_empty() {
+                    return Err(anyhow::anyhow!("No SSL profiles available"));
+                }
+                
+                println!("\nAvailable SSL Certificate Types:");
+                for (idx, profile) in profiles.iter().enumerate() {
+                    println!("  {}. {} (ID: {})", idx + 1, profile.name, profile.id);
+                }
+                
+                let selection: usize = input("Select certificate type number")
+                    .interact()?;
+                
+                if selection < 1 || selection > profiles.len() {
+                    return Err(anyhow::anyhow!("Invalid selection"));
+                }
+                
+                Some(profiles[selection - 1].id.to_string())
+            } else {
+                product_code
+            };
+            
+            sectigo::enroll_and_collect(&config, &csr, &out, description, selected_code)?;
             println!("Success: Certificate saved to {}", out);
         }
         Commands::Pfx {
@@ -124,7 +152,8 @@ fn run_interactive_menu() -> Result<()> {
             .item(1, "Submit CSR to Sectigo", "Submit existing CSR to Sectigo API")
             .item(2, "Create PFX", "Combine key and cert into a PFX file")
             .item(3, "Generate Config from Cert/CSR", "Create a .conf file from existing data")
-            .item(4, "Exit", "Close the application")
+            .item(4, "List SSL Profiles", "View available SSL certificate types")
+            .item(5, "Exit", "Close the application")
             .interact()?;
 
         match selection {
@@ -173,7 +202,28 @@ fn run_interactive_menu() -> Result<()> {
                 let desc_opt = if description.is_empty() { None } else { Some(description) };
 
                 let config = sectigo::SectigoConfig::default();
-                sectigo::enroll_and_collect(&config, &csr, &out, desc_opt)?;
+                
+                // If SECTIGO_PRODUCT_CODE not in env, prompt user to select
+                let selected_code = if std::env::var("SECTIGO_PRODUCT_CODE").is_err() {
+                    let profiles = sectigo::list_ssl_profiles(&config)?;
+                    
+                    if profiles.is_empty() {
+                        eprintln!("No SSL profiles available");
+                        continue;
+                    }
+                    
+                    let mut sel = select("Select SSL Certificate Type");
+                    for (idx, profile) in profiles.iter().enumerate() {
+                        sel = sel.item(idx, &profile.name, "");
+                    }
+                    let selection = sel.interact()?;
+                    
+                    Some(profiles[selection].id.to_string())
+                } else {
+                    None
+                };
+                
+                sectigo::enroll_and_collect(&config, &csr, &out, desc_opt, selected_code)?;
                 println!("Success: Certificate saved to {}", out);
             }
             2 => {
@@ -209,6 +259,33 @@ fn run_interactive_menu() -> Result<()> {
                 let is_csr = input_path.ends_with(".csr");
                 openssl_utils::generate_conf_from_cert_or_csr(&input_path, &out, is_csr)?;
                 println!("Success: OpenSSL config written to {}", out);
+            }
+            4 => {
+                let config = sectigo::SectigoConfig::default();
+                match sectigo::list_ssl_profiles(&config) {
+                    Ok(profiles) => {
+                        if profiles.is_empty() {
+                            println!("\nNo SSL profiles available.");
+                        } else {
+                            println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                            println!("║              Available SSL Certificate Types                 ║");
+                            println!("╚═══════════════════════════════════════════════════════════════╝\n");
+                            
+                            for profile in profiles {
+                                println!("  • {} (ID: {})", profile.name, profile.id);
+                                if !profile.terms.is_empty() {
+                                    print!("    Available terms: ");
+                                    let terms: Vec<String> = profile.terms.iter().map(|t| format!("{} days", t)).collect();
+                                    println!("{}", terms.join(", "));
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error fetching SSL profiles: {}", e);
+                    }
+                }
             }
             _ => break,
         }
