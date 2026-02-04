@@ -71,11 +71,13 @@ pub struct SslProfile {
     pub use_secondary_org_name: bool,
 }
 
-fn get_scm_token(config: &SectigoConfig) -> Result<String> {
+fn get_scm_token(config: &SectigoConfig, debug: bool) -> Result<String> {
     let client = reqwest::blocking::Client::new();
     
-    println!("  URL: {}", config.scm_token_url);
-    println!("  Client ID length: {}", config.scm_client_id.len());
+    if debug {
+        println!("  URL: {}", config.scm_token_url);
+        println!("  Client ID length: {}", config.scm_client_id.len());
+    }
     
     let response = client.post(&config.scm_token_url)
         .form(&[
@@ -98,9 +100,9 @@ fn get_scm_token(config: &SectigoConfig) -> Result<String> {
     Ok(token_res.access_token)
 }
 
-pub fn list_ssl_profiles(config: &SectigoConfig) -> Result<Vec<SslProfile>> {
+pub fn list_ssl_profiles(config: &SectigoConfig, debug: bool) -> Result<Vec<SslProfile>> {
     println!("Fetching available SSL certificate types from Sectigo...");
-    let token = get_scm_token(config)?;
+    let token = get_scm_token(config, debug)?;
 
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -141,14 +143,15 @@ pub fn enroll_and_collect(
     csr_file: &str, 
     output_cert: &str, 
     description: Option<String>,
-    product_code: Option<String>
-) -> Result<()> {
+    product_code: Option<String>,
+    debug: bool
+) -> Result<String> {
     let csr_content = fs::read_to_string(csr_file).context("Failed to read CSR file")?;
     let stripped_csr = strip_csr(&csr_content);
     
     // Get Bearer Token
     println!("Authenticating with Sectigo SCM (Admin API v3)...");
-    let token = get_scm_token(config)?;
+    let token = get_scm_token(config, debug)?;
 
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -164,9 +167,11 @@ pub fn enroll_and_collect(
         term: config.term,
     };
 
-    println!("DEBUG: Sectigo Enrollment Request:");
-    println!("  URL: {}/api/ssl/v1/enroll", config.api_base);
-    println!("  Payload: {}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    if debug {
+        println!("DEBUG: Sectigo Enrollment Request:");
+        println!("  URL: {}/api/ssl/v1/enroll", config.api_base);
+        println!("  Payload: {}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    }
     
     let response = client.post(&format!("{}/api/ssl/v1/enroll", config.api_base))
         .header("Content-Type", "application/json")
@@ -219,7 +224,7 @@ pub fn enroll_and_collect(
         .error_for_status()?;
 
     let cert_content = response.text()?;
-    fs::write(output_cert, cert_content)?;
+    fs::write(output_cert, &cert_content)?;
 
-    Ok(())
+    Ok(cert_content)
 }

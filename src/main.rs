@@ -3,13 +3,17 @@ mod sectigo;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use cliclack::{input, intro, outro, password, select};
+use cliclack::{confirm, input, intro, outro, password, select};
 use dotenvy::dotenv;
 use std::path::Path;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
+    /// Enable debug output
+    #[arg(long, global = true)]
+    debug: bool,
+    
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -67,12 +71,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(cmd) => execute_command(cmd),
-        None => run_interactive_menu()
+        Some(cmd) => execute_command(cmd, cli.debug),
+        None => run_interactive_menu(cli.debug)
     }
 }
 
-fn execute_command(cmd: Commands) -> Result<()> {
+fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
     match cmd {
         Commands::Generate { conf, key, csr, password: pw } => {
             let pass = if let Some(p) = pw {
@@ -88,7 +92,7 @@ fn execute_command(cmd: Commands) -> Result<()> {
             
             // If product_code not provided via CLI and not in env, prompt user to select
             let selected_code = if product_code.is_none() && std::env::var("SECTIGO_PRODUCT_CODE").is_err() {
-                let profiles = sectigo::list_ssl_profiles(&config)?;
+                let profiles = sectigo::list_ssl_profiles(&config, debug)?;
                 
                 if profiles.is_empty() {
                     return Err(anyhow::anyhow!("No SSL profiles available"));
@@ -111,7 +115,7 @@ fn execute_command(cmd: Commands) -> Result<()> {
                 product_code
             };
             
-            sectigo::enroll_and_collect(&config, &csr, &out, description, selected_code)?;
+            let _cert_content = sectigo::enroll_and_collect(&config, &csr, &out, description, selected_code, debug)?;
             println!("Success: Certificate saved to {}", out);
         }
         Commands::Pfx {
@@ -143,7 +147,7 @@ fn execute_command(cmd: Commands) -> Result<()> {
     Ok(())
 }
 
-fn run_interactive_menu() -> Result<()> {
+fn run_interactive_menu(debug: bool) -> Result<()> {
     intro("Cert Gen Tools")?;
 
     loop {
@@ -205,7 +209,7 @@ fn run_interactive_menu() -> Result<()> {
                 
                 // If SECTIGO_PRODUCT_CODE not in env, prompt user to select
                 let selected_code = if std::env::var("SECTIGO_PRODUCT_CODE").is_err() {
-                    let profiles = sectigo::list_ssl_profiles(&config)?;
+                    let profiles = sectigo::list_ssl_profiles(&config, debug)?;
                     
                     if profiles.is_empty() {
                         eprintln!("No SSL profiles available");
@@ -223,7 +227,70 @@ fn run_interactive_menu() -> Result<()> {
                     None
                 };
                 
-                sectigo::enroll_and_collect(&config, &csr, &out, desc_opt, selected_code)?;
+                // Extract and display CSR details before submitting
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║                    CSR Details Review                        ║");
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
+                
+                match openssl_utils::extract_csr_details(&csr) {
+                    Ok((cn, sans)) => {
+                        println!("  CommonName: {}", cn);
+                        
+                        if sans.is_empty() {
+                            println!("  SANs: None");
+                        } else {
+                            println!("  SANs:");
+                            for san in &sans {
+                                println!("    • {}", san);
+                            }
+                        }
+                        
+                        println!();
+                        
+                        // Ask for confirmation
+                        let confirm_result = confirm("Do you want to continue with enrollment?")
+                            .interact()?;
+                        
+                        if !confirm_result {
+                            println!("Enrollment cancelled.");
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Could not extract CSR details: {}", e);
+                        eprintln!("Continuing with enrollment anyway...");
+                    }
+                }
+                
+                let cert_content = sectigo::enroll_and_collect(&config, &csr, &out, desc_opt, selected_code, debug)?;
+                
+                // Display certificate details
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║              Downloaded Certificate Details                  ║");
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
+                
+                match openssl_utils::extract_cert_details(&cert_content) {
+                    Ok(details) => {
+                        println!("  CommonName: {}", details.common_name);
+                        println!("  Issuer: {}", details.issuer);
+                        println!("  Valid From: {}", details.not_before);
+                        println!("  Valid Until: {}", details.not_after);
+                        
+                        if details.sans.is_empty() {
+                            println!("  SANs: None");
+                        } else {
+                            println!("  SANs:");
+                            for san in &details.sans {
+                                println!("    • {}", san);
+                            }
+                        }
+                        println!();
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Could not extract certificate details: {}", e);
+                    }
+                }
+                
                 println!("Success: Certificate saved to {}", out);
             }
             2 => {
@@ -262,7 +329,7 @@ fn run_interactive_menu() -> Result<()> {
             }
             4 => {
                 let config = sectigo::SectigoConfig::default();
-                match sectigo::list_ssl_profiles(&config) {
+                match sectigo::list_ssl_profiles(&config, debug) {
                     Ok(profiles) => {
                         if profiles.is_empty() {
                             println!("\nNo SSL profiles available.");

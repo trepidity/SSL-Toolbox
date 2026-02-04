@@ -201,6 +201,136 @@ fn extract_sans_into(sans: Stack<GeneralName>, san_list: &mut Vec<(String, Strin
     }
 }
 
+pub struct CertDetails {
+    pub common_name: String,
+    pub sans: Vec<String>,
+    pub not_before: String,
+    pub not_after: String,
+    pub issuer: String,
+}
+
+pub fn extract_cert_details(cert_content: &str) -> Result<CertDetails> {
+    let cert = X509::from_pem(cert_content.as_bytes())
+        .context("Failed to parse certificate")?;
+    
+    let subject = cert.subject_name();
+    
+    // Extract CommonName
+    let common_name = subject.entries()
+        .find(|entry| entry.object().nid() == Nid::COMMONNAME)
+        .and_then(|entry| entry.data().as_utf8().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    
+    // Extract SANs
+    let mut sans = Vec::new();
+    if let Some(san_ext) = cert.subject_alt_names() {
+        for n in san_ext {
+            if let Some(dns) = n.dnsname() {
+                sans.push(format!("DNS: {}", dns));
+            } else if let Some(ip) = n.ipaddress() {
+                let addr = match ip.len() {
+                    4 => IpAddr::V4(std::net::Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])),
+                    16 => {
+                        let mut octets = [0u8; 16];
+                        octets.copy_from_slice(ip);
+                        IpAddr::V6(std::net::Ipv6Addr::from(octets))
+                    }
+                    _ => continue,
+                };
+                sans.push(format!("IP: {}", addr));
+            } else if let Some(email) = n.email() {
+                sans.push(format!("Email: {}", email));
+            } else if let Some(uri) = n.uri() {
+                sans.push(format!("URI: {}", uri));
+            }
+        }
+    }
+    
+    // Extract validity period
+    let not_before = cert.not_before().to_string();
+    let not_after = cert.not_after().to_string();
+    
+    // Extract issuer
+    let issuer = cert.issuer_name();
+    let issuer_cn = issuer.entries()
+        .find(|entry| entry.object().nid() == Nid::COMMONNAME)
+        .and_then(|entry| entry.data().as_utf8().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // If no CN, try to get O (Organization)
+            issuer.entries()
+                .find(|entry| entry.object().nid() == Nid::ORGANIZATIONNAME)
+                .and_then(|entry| entry.data().as_utf8().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "Unknown".to_string())
+        });
+    
+    Ok(CertDetails {
+        common_name,
+        sans,
+        not_before,
+        not_after,
+        issuer: issuer_cn,
+    })
+}
+
+pub fn extract_csr_details(csr_file: &str) -> Result<(String, Vec<String>)> {
+    let input_bytes = fs::read(csr_file).context("Failed to read CSR file")?;
+    
+    let req = X509Req::from_pem(&input_bytes)
+        .or_else(|_| X509Req::from_der(&input_bytes))
+        .context("Failed to parse CSR")?;
+    
+    let subject = req.subject_name();
+    
+    // Extract CommonName
+    let cn = subject.entries()
+        .find(|entry| entry.object().nid() == Nid::COMMONNAME)
+        .and_then(|entry| entry.data().as_utf8().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    
+    // Extract SANs
+    let mut san_list = Vec::new();
+    
+    // Use a "temporary certificate" trick to extract SANs using high-level API
+    let mut temp_builder = X509::builder()?;
+    temp_builder.set_subject_name(req.subject_name())?;
+    let pkey = req.public_key()?;
+    temp_builder.set_pubkey(&pkey)?;
+    if let Ok(extensions) = req.extensions() {
+        for ext in extensions {
+            let _ = temp_builder.append_extension(ext);
+        }
+    }
+    let temp_cert = temp_builder.build();
+    if let Some(sans) = temp_cert.subject_alt_names() {
+        for n in sans {
+            if let Some(dns) = n.dnsname() {
+                san_list.push(format!("DNS: {}", dns));
+            } else if let Some(ip) = n.ipaddress() {
+                let addr = match ip.len() {
+                    4 => IpAddr::V4(std::net::Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])),
+                    16 => {
+                        let mut octets = [0u8; 16];
+                        octets.copy_from_slice(ip);
+                        IpAddr::V6(std::net::Ipv6Addr::from(octets))
+                    }
+                    _ => continue,
+                };
+                san_list.push(format!("IP: {}", addr));
+            } else if let Some(email) = n.email() {
+                san_list.push(format!("Email: {}", email));
+            } else if let Some(uri) = n.uri() {
+                san_list.push(format!("URI: {}", uri));
+            }
+        }
+    }
+    
+    Ok((cn, san_list))
+}
+
 pub fn generate_conf_from_cert_or_csr(input_file: &str, output_conf: &str, is_csr: bool) -> Result<()> {
     let mut config = String::new();
     config.push_str("[ req ]\n\n");
