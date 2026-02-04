@@ -57,6 +57,10 @@ You'll be presented with a menu to:
 2. Submit CSR to Sectigo
 3. Create PFX
 4. Generate Config from Cert/CSR
+5. View Certificate Details
+6. View CSR Details
+7. List SSL Profiles
+8. Exit
 
 ### Command-Line Mode
 
@@ -103,6 +107,18 @@ cert-gen-tools config \
   --is-csr  # include if input is a CSR instead of certificate
 ```
 
+#### View Certificate Details
+
+```bash
+cert-gen-tools view-cert --input certificate.crt
+```
+
+#### View CSR Details
+
+```bash
+cert-gen-tools view-csr --input request.csr
+```
+
 ## OpenSSL Configuration Format
 
 The tool expects OpenSSL configuration files with the following structure:
@@ -135,6 +151,8 @@ The tool automatically handles certificate files containing full chains:
 - You can also provide a separate chain file using the `--chain` option
 
 ## Examples
+
+**Note:** The tool automatically uses the correct path separator for your operating system (forward slashes `/` on macOS/Linux, backslashes `\` on Windows). Examples below use forward slashes, but Windows users should use backslashes (e.g., `config\server.conf`).
 
 ### Complete Workflow
 

@@ -62,6 +62,76 @@ enum Commands {
         #[arg(long)]
         is_csr: bool,
     },
+    /// View details of a certificate
+    ViewCert {
+        #[arg(short, long)]
+        input: String,
+    },
+    /// View details of a CSR
+    ViewCsr {
+        #[arg(short, long)]
+        input: String,
+    },
+}
+
+/// Helper function to display certificate chain details
+fn display_cert_chain(cert_content: &str, title: &str) {
+    match openssl_utils::extract_cert_chain_details(cert_content) {
+        Ok(cert_chain) => {
+            if cert_chain.len() == 1 {
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║  {:^61}  ║", title);
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
+                
+                let details = &cert_chain[0];
+                println!("  CommonName: {}", details.common_name);
+                println!("  Issuer: {}", details.issuer);
+                println!("  Valid From: {}", details.not_before);
+                println!("  Valid Until: {}", details.not_after);
+                
+                if details.sans.is_empty() {
+                    println!("  SANs: None");
+                } else {
+                    println!("  SANs:");
+                    for san in &details.sans {
+                        println!("    • {}", san);
+                    }
+                }
+                println!();
+            } else {
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║  {:^61}  ║", format!("{} ({} certs)", title, cert_chain.len()));
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
+                
+                for (idx, details) in cert_chain.iter().enumerate() {
+                    let cert_type = if idx == 0 {
+                        "Root Certificate"
+                    } else if idx == cert_chain.len() - 1 {
+                        "End-Entity Certificate"
+                    } else {
+                        "Intermediate Certificate"
+                    };
+                    
+                    println!("┌─ Certificate #{} - {} ─────────────────────────", idx + 1, cert_type);
+                    println!("│  CommonName: {}", details.common_name);
+                    println!("│  Issuer: {}", details.issuer);
+                    println!("│  Valid From: {}", details.not_before);
+                    println!("│  Valid Until: {}", details.not_after);
+                    
+                    if !details.sans.is_empty() {
+                        println!("│  SANs:");
+                        for san in &details.sans {
+                            println!("│    • {}", san);
+                        }
+                    }
+                    println!("└────────────────────────────────────────────────────────────────\n");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: Could not extract certificate details: {}", e);
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -143,6 +213,34 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             openssl_utils::generate_conf_from_cert_or_csr(&input_path, &out, is_csr)?;
             println!("Success: OpenSSL config written to {}", out);
         }
+        Commands::ViewCert { input } => {
+            let cert_content = std::fs::read_to_string(&input)?;
+            display_cert_chain(&cert_content, "Certificate Details");
+        }
+        Commands::ViewCsr { input } => {
+            println!("\n╔═══════════════════════════════════════════════════════════════╗");
+            println!("║                        CSR Details                           ║");
+            println!("╚═══════════════════════════════════════════════════════════════╝\n");
+            
+            match openssl_utils::extract_csr_details(&input) {
+                Ok((cn, sans)) => {
+                    println!("  CommonName: {}", cn);
+                    
+                    if sans.is_empty() {
+                        println!("  SANs: None");
+                    } else {
+                        println!("  SANs:");
+                        for san in &sans {
+                            println!("    • {}", san);
+                        }
+                    }
+                    println!();
+                }
+                Err(e) => {
+                    eprintln!("Error: Could not extract CSR details: {}", e);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -156,8 +254,10 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
             .item(1, "Submit CSR to Sectigo", "Submit existing CSR to Sectigo API")
             .item(2, "Create PFX", "Combine key and cert into a PFX file")
             .item(3, "Generate Config from Cert/CSR", "Create a .conf file from existing data")
-            .item(4, "List SSL Profiles", "View available SSL certificate types")
-            .item(5, "Exit", "Close the application")
+            .item(4, "View Certificate Details", "Display details of an existing certificate")
+            .item(5, "View CSR Details", "Display details of an existing CSR")
+            .item(6, "List SSL Profiles", "View available SSL certificate types")
+            .item(7, "Exit", "Close the application")
             .interact()?;
 
         match selection {
@@ -265,31 +365,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let cert_content = sectigo::enroll_and_collect(&config, &csr, &out, desc_opt, selected_code, debug)?;
                 
                 // Display certificate details
-                println!("\n╔═══════════════════════════════════════════════════════════════╗");
-                println!("║              Downloaded Certificate Details                  ║");
-                println!("╚═══════════════════════════════════════════════════════════════╝\n");
-                
-                match openssl_utils::extract_cert_details(&cert_content) {
-                    Ok(details) => {
-                        println!("  CommonName: {}", details.common_name);
-                        println!("  Issuer: {}", details.issuer);
-                        println!("  Valid From: {}", details.not_before);
-                        println!("  Valid Until: {}", details.not_after);
-                        
-                        if details.sans.is_empty() {
-                            println!("  SANs: None");
-                        } else {
-                            println!("  SANs:");
-                            for san in &details.sans {
-                                println!("    • {}", san);
-                            }
-                        }
-                        println!();
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Could not extract certificate details: {}", e);
-                    }
-                }
+                display_cert_chain(&cert_content, "Downloaded Certificate Details");
                 
                 println!("Success: Certificate saved to {}", out);
             }
@@ -328,6 +404,44 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 println!("Success: OpenSSL config written to {}", out);
             }
             4 => {
+                let input_path: String = input("Path to certificate file (.crt, .cer, .pem)").interact()?;
+                
+                match std::fs::read_to_string(&input_path) {
+                    Ok(cert_content) => {
+                        display_cert_chain(&cert_content, "Certificate Details");
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading file: {}", e);
+                    }
+                }
+            }
+            5 => {
+                let input_path: String = input("Path to CSR file (.csr)").interact()?;
+                
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║                        CSR Details                           ║");
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
+                
+                match openssl_utils::extract_csr_details(&input_path) {
+                    Ok((cn, sans)) => {
+                        println!("  CommonName: {}", cn);
+                        
+                        if sans.is_empty() {
+                            println!("  SANs: None");
+                        } else {
+                            println!("  SANs:");
+                            for san in &sans {
+                                println!("    • {}", san);
+                            }
+                        }
+                        println!();
+                    }
+                    Err(e) => {
+                        eprintln!("Error: Could not extract CSR details: {}", e);
+                    }
+                }
+            }
+            6 => {
                 let config = sectigo::SectigoConfig::default();
                 match sectigo::list_ssl_profiles(&config, debug) {
                     Ok(profiles) => {
@@ -365,15 +479,10 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
 fn derive_path(base_path: &str, new_ext: &str) -> String {
     let path = Path::new(base_path);
     if let Some(stem) = path.file_stem() {
-        if let Some(stem_str) = stem.to_str() {
-            let parent = path.parent().unwrap_or(Path::new(""));
-            let parent_str = parent.display().to_string();
-            if parent_str.is_empty() {
-                return format!("{}.{}", stem_str, new_ext);
-            } else {
-                return format!("{}/{}.{}", parent_str, stem_str, new_ext);
-            }
-        }
+        let parent = path.parent().unwrap_or(Path::new(""));
+        // Use Path::join to ensure OS-appropriate path separators
+        let new_path = parent.join(format!("{}.{}", stem.to_string_lossy(), new_ext));
+        return new_path.display().to_string();
     }
     String::new()
 }

@@ -7,7 +7,6 @@ pub struct SectigoConfig {
     pub api_base: String,
     pub org_id: String,
     pub product_code: String,
-    pub term: i32,
     pub scm_client_id: String,
     pub scm_client_secret: String,
     pub scm_token_url: String,
@@ -19,7 +18,6 @@ impl Default for SectigoConfig {
             api_base: env::var("SECTIGO_API_BASE").unwrap_or_else(|_| "https://cert-manager.com".to_string()),
             org_id: env::var("SECTIGO_ORG_ID").unwrap_or_else(|_| "6377".to_string()),
             product_code: env::var("SECTIGO_PRODUCT_CODE").unwrap_or_else(|_| "4491".to_string()),
-            term: env::var("SECTIGO_TERM").ok().and_then(|t| t.parse().ok()).unwrap_or(190),
             scm_client_id: env::var("SCM_CLIENT_ID").unwrap_or_default(),
             scm_client_secret: env::var("SCM_CLIENT_SECRET").unwrap_or_default(),
             scm_token_url: env::var("SCM_TOKEN_URL").unwrap_or_default(),
@@ -159,12 +157,28 @@ pub fn enroll_and_collect(
 
     let cert_type = product_code.unwrap_or_else(|| config.product_code.clone());
     let org_id = config.org_id.clone();
+    
+    // Fetch SSL profiles to get available terms for the selected cert type
+    let profiles = list_ssl_profiles(config, debug)?;
+    let profile = profiles.iter()
+        .find(|p| p.id.to_string() == cert_type)
+        .ok_or_else(|| anyhow!("Could not find SSL profile with ID: {}", cert_type))?;
+    
+    // Select the longest available term
+    let term_days = profile.terms.iter().max()
+        .ok_or_else(|| anyhow!("No terms available for profile: {}", profile.name))?;
+    
+    if debug {
+        println!("DEBUG: Selected profile: {} (ID: {})", profile.name, profile.id);
+        println!("DEBUG: Available terms: {:?}", profile.terms);
+        println!("DEBUG: Selected term: {} days", term_days);
+    }
 
     let payload = EnrollRequest {
         cert_type,
         csr: stripped_csr,
         org_id,
-        term: config.term,
+        term: *term_days,
     };
 
     if debug {
