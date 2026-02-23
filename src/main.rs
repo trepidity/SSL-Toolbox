@@ -78,6 +78,20 @@ enum Commands {
         #[arg(short, long)]
         input: String,
     },
+    /// Verify TLS certificate and protocol for an HTTPS endpoint
+    VerifyHttps {
+        #[arg(short = 'H', long)]
+        host: String,
+        #[arg(short, long, default_value = "443")]
+        port: u16,
+    },
+    /// Verify TLS certificate and protocol for an LDAPS endpoint
+    VerifyLdaps {
+        #[arg(short = 'H', long)]
+        host: String,
+        #[arg(short, long, default_value = "636")]
+        port: u16,
+    },
 }
 
 /// Helper function to display certificate chain details
@@ -247,11 +261,11 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             println!("\n╔═══════════════════════════════════════════════════════════════╗");
             println!("║                        CSR Details                           ║");
             println!("╚═══════════════════════════════════════════════════════════════╝\n");
-            
+
             match openssl_utils::extract_csr_details(&input) {
                 Ok((cn, sans)) => {
                     println!("  CommonName: {}", cn);
-                    
+
                     if sans.is_empty() {
                         println!("  SANs: None");
                     } else {
@@ -264,6 +278,28 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("Error: Could not extract CSR details: {}", e);
+                }
+            }
+        }
+        Commands::VerifyHttps { host, port } => {
+            println!("\nConnecting to {}:{}...", host, port);
+            match tls_check::connect_and_check(&host, port) {
+                Ok(result) => {
+                    tls_check::display_tls_check_result(&result, "HTTPS Endpoint Verification");
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                }
+            }
+        }
+        Commands::VerifyLdaps { host, port } => {
+            println!("\nConnecting to {}:{}...", host, port);
+            match tls_check::connect_and_check(&host, port) {
+                Ok(result) => {
+                    tls_check::display_tls_check_result(&result, "LDAPS Endpoint Verification");
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
                 }
             }
         }
