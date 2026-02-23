@@ -53,6 +53,11 @@ enum Commands {
         #[arg(long)]
         chain: Option<String>,
     },
+    /// Generate a new OpenSSL configuration from scratch via interactive prompts
+    NewConfig {
+        #[arg(short, long)]
+        out: Option<String>,
+    },
     /// Generate OpenSSL configuration from existing certificate or CSR
     Config {
         #[arg(short, long)]
@@ -205,6 +210,26 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             openssl_utils::create_pfx(&key, &cert, chain.as_deref(), &out, key_pass_opt, &pfx_pass)?;
             println!("Success: PFX created at {}", out);
         }
+        Commands::NewConfig { out } => {
+            let inputs = prompt_config_inputs()?;
+            let output_path = if let Some(o) = out {
+                o
+            } else {
+                let default_path = format!("{}.cnf", inputs.common_name);
+                let path: String = input("Output .cnf file path")
+                    .default_input(&default_path)
+                    .interact()?;
+                path
+            };
+            print_config_summary(&inputs, &output_path);
+            let confirmed: bool = confirm("Write this config file?").interact()?;
+            if confirmed {
+                openssl_utils::generate_conf_from_inputs(&inputs, &output_path)?;
+                println!("Success: OpenSSL config written to {}", output_path);
+            } else {
+                println!("Cancelled.");
+            }
+        }
         Commands::Config {
             input: input_path,
             out,
@@ -253,11 +278,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
             .item(0, "Generate Key and CSR", "Build a new key and CSR from a config file")
             .item(1, "Submit CSR to Sectigo", "Submit existing CSR to Sectigo API")
             .item(2, "Create PFX", "Combine key and cert into a PFX file")
-            .item(3, "Generate Config from Cert/CSR", "Create a .conf file from existing data")
-            .item(4, "View Certificate Details", "Display details of an existing certificate")
-            .item(5, "View CSR Details", "Display details of an existing CSR")
-            .item(6, "List SSL Profiles", "View available SSL certificate types")
-            .item(7, "Exit", "Close the application")
+            .item(3, "Generate New OpenSSL Config", "Build a .cnf file from scratch via prompts")
+            .item(4, "Generate Config from Cert/CSR", "Create a .cnf file from existing data")
+            .item(5, "View Certificate Details", "Display details of an existing certificate")
+            .item(6, "View CSR Details", "Display details of an existing CSR")
+            .item(7, "List SSL Profiles", "View available SSL certificate types")
+            .item(8, "Exit", "Close the application")
             .interact()?;
 
         match selection {
@@ -397,13 +423,28 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 println!("Success: PFX created at {}", out);
             }
             3 => {
+                let inputs = prompt_config_inputs()?;
+                let default_path = format!("{}.cnf", inputs.common_name);
+                let output_path: String = input("Output .cnf file path")
+                    .default_input(&default_path)
+                    .interact()?;
+                print_config_summary(&inputs, &output_path);
+                let confirmed: bool = confirm("Write this config file?").interact()?;
+                if confirmed {
+                    openssl_utils::generate_conf_from_inputs(&inputs, &output_path)?;
+                    println!("Success: OpenSSL config written to {}", output_path);
+                } else {
+                    println!("Cancelled.");
+                }
+            }
+            4 => {
                 let input_path: String = input("Path to existing .cer or .csr").interact()?;
                 let out: String = input("Path to output .conf file").interact()?;
                 let is_csr = input_path.ends_with(".csr");
                 openssl_utils::generate_conf_from_cert_or_csr(&input_path, &out, is_csr)?;
                 println!("Success: OpenSSL config written to {}", out);
             }
-            4 => {
+            5 => {
                 let input_path: String = input("Path to certificate file (.crt, .cer, .pem)").interact()?;
                 
                 match std::fs::read_to_string(&input_path) {
@@ -415,7 +456,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     }
                 }
             }
-            5 => {
+            6 => {
                 let input_path: String = input("Path to CSR file (.csr)").interact()?;
                 
                 println!("\n╔═══════════════════════════════════════════════════════════════╗");
@@ -441,7 +482,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     }
                 }
             }
-            6 => {
+            7 => {
                 let config = sectigo::SectigoConfig::default();
                 match sectigo::list_ssl_profiles(&config, debug) {
                     Ok(profiles) => {
@@ -474,6 +515,107 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
 
     outro("Goodbye!")?;
     Ok(())
+}
+
+fn prompt_config_inputs() -> Result<openssl_utils::ConfigInputs> {
+    let common_name: String = input("Common Name").interact()?;
+    let country: String = input("Country (2-letter code)")
+        .default_input("US")
+        .interact()?;
+    let state: String = input("State or Province")
+        .default_input("Texas")
+        .interact()?;
+    let locality: String = input("Locality / City")
+        .default_input("Dallas")
+        .interact()?;
+    let organization: String = input("Organization")
+        .default_input("Baylor Scott & White Health")
+        .interact()?;
+    let org_unit: String = input("Organizational Unit")
+        .default_input("IAM Engineering")
+        .interact()?;
+    let email: String = input("Email Address")
+        .default_input("IAMENGINEERING@BSWHealth.org")
+        .interact()?;
+
+    // Additional DNS SANs
+    let mut san_dns: Vec<String> = Vec::new();
+    println!("\nAdditional DNS SANs (the CN is already included as DNS.1).");
+    println!("Press Enter with no input when done.");
+    loop {
+        let dns: String = input("Additional DNS SAN (or Enter to skip)")
+            .required(false)
+            .interact()?;
+        if dns.is_empty() {
+            break;
+        }
+        san_dns.push(dns);
+    }
+
+    // IP SANs
+    let mut san_ips: Vec<String> = Vec::new();
+    println!("\nIP SANs (optional). Press Enter with no input when done.");
+    loop {
+        let ip: String = input("IP SAN (or Enter to skip)")
+            .required(false)
+            .interact()?;
+        if ip.is_empty() {
+            break;
+        }
+        san_ips.push(ip);
+    }
+
+    // Key size
+    let key_size: u32 = select("Key size")
+        .item(2048, "2048", "Default — widely compatible")
+        .item(4096, "4096", "Stronger but slower")
+        .interact()?;
+
+    // Extended Key Usage
+    let extended_key_usage: String = select("Extended Key Usage")
+        .item("serverAuth".to_string(), "Server Auth", "TLS server certificates (default)")
+        .item("clientAuth".to_string(), "Client Auth", "TLS client certificates")
+        .item("serverAuth, clientAuth".to_string(), "Both (mTLS)", "Mutual TLS — server and client auth")
+        .interact()?;
+
+    Ok(openssl_utils::ConfigInputs {
+        common_name,
+        country,
+        state,
+        locality,
+        organization,
+        org_unit,
+        email,
+        san_dns,
+        san_ips,
+        key_size,
+        extended_key_usage,
+    })
+}
+
+fn print_config_summary(inputs: &openssl_utils::ConfigInputs, output_path: &str) {
+    println!("\n╔═══════════════════════════════════════════════════════════════╗");
+    println!("║                   Config Summary                            ║");
+    println!("╚═══════════════════════════════════════════════════════════════╝\n");
+    println!("  CN:           {}", inputs.common_name);
+    println!("  Country:      {}", inputs.country);
+    println!("  State:        {}", inputs.state);
+    println!("  Locality:     {}", inputs.locality);
+    println!("  Org:          {}", inputs.organization);
+    println!("  OU:           {}", inputs.org_unit);
+    println!("  Email:        {}", inputs.email);
+    println!("  Key Size:     {}", inputs.key_size);
+    println!("  Ext Key Use:  {}", inputs.extended_key_usage);
+    println!("  SANs:");
+    println!("    DNS.1 = {} (from CN)", inputs.common_name);
+    for (i, dns) in inputs.san_dns.iter().enumerate() {
+        println!("    DNS.{} = {}", i + 2, dns);
+    }
+    for (i, ip) in inputs.san_ips.iter().enumerate() {
+        println!("    IP.{}  = {}", i + 1, ip);
+    }
+    println!("  Output:       {}", output_path);
+    println!();
 }
 
 fn derive_path(base_path: &str, new_ext: &str) -> String {

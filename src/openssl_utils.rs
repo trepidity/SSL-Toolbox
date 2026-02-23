@@ -489,6 +489,64 @@ pub fn extract_csr_details(csr_file: &str) -> Result<(String, Vec<String>)> {
     Ok((cn, san_list))
 }
 
+pub struct ConfigInputs {
+    pub common_name: String,
+    pub country: String,
+    pub state: String,
+    pub locality: String,
+    pub organization: String,
+    pub org_unit: String,
+    pub email: String,
+    pub san_dns: Vec<String>,
+    pub san_ips: Vec<String>,
+    pub key_size: u32,
+    pub extended_key_usage: String,
+}
+
+pub fn generate_conf_from_inputs(inputs: &ConfigInputs, output_path: &str) -> Result<()> {
+    let mut config = String::new();
+
+    config.push_str("[ req ]\n");
+    config.push_str(&format!("default_bits        = {}\n", inputs.key_size));
+    config.push_str("default_md          = sha256\n");
+    config.push_str("string_mask         = utf8only\n");
+    config.push_str("distinguished_name  = req_distinguished_name\n");
+    config.push_str("req_extensions      = v3_req\n");
+    config.push_str("prompt              = no\n");
+
+    config.push_str("\n[ req_distinguished_name ]\n");
+    config.push_str(&format!("countryName             = {}\n", inputs.country));
+    config.push_str(&format!("stateOrProvinceName     = {}\n", inputs.state));
+    config.push_str(&format!("localityName            = {}\n", inputs.locality));
+    config.push_str(&format!("organizationName        = {}\n", inputs.organization));
+    config.push_str(&format!("organizationalUnitName  = {}\n", inputs.org_unit));
+    config.push_str(&format!("commonName              = {}\n", inputs.common_name));
+    config.push_str(&format!("emailAddress            = {}\n", inputs.email));
+
+    config.push_str("\n[ v3_req ]\n");
+    config.push_str("basicConstraints        = CA:FALSE\n");
+    config.push_str("keyUsage                = critical, digitalSignature, keyEncipherment\n");
+    config.push_str(&format!("extendedKeyUsage        = {}\n", inputs.extended_key_usage));
+    config.push_str("subjectKeyIdentifier    = hash\n");
+    config.push_str("subjectAltName          = @alt_names\n");
+
+    config.push_str("\n[ alt_names ]\n");
+    let mut dns_idx = 1;
+    // CN is always DNS.1
+    config.push_str(&format!("DNS.{} = {}\n", dns_idx, inputs.common_name));
+    dns_idx += 1;
+    for dns in &inputs.san_dns {
+        config.push_str(&format!("DNS.{} = {}\n", dns_idx, dns));
+        dns_idx += 1;
+    }
+    for (i, ip) in inputs.san_ips.iter().enumerate() {
+        config.push_str(&format!("IP.{} = {}\n", i + 1, ip));
+    }
+
+    fs::write(output_path, config).context("Failed to write config file")?;
+    Ok(())
+}
+
 pub fn generate_conf_from_cert_or_csr(input_file: &str, output_conf: &str, is_csr: bool) -> Result<()> {
     let mut config = String::new();
     config.push_str("[ req ]\n\n");
