@@ -1,0 +1,42 @@
+trigger:
+  tags:
+    include:
+      - 'v*'
+
+strategy:
+  matrix:
+    linux:
+      vmImage: 'ubuntu-latest'
+      target: x86_64-unknown-linux-gnu
+    windows:
+      vmImage: 'windows-latest'
+      target: x86_64-pc-windows-msvc
+    macos:
+      vmImage: 'macOS-latest'
+      target: x86_64-apple-darwin
+
+pool:
+  vmImage: $(vmImage)
+
+steps:
+  - script: |
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+      echo "##vso[task.prependpath]$HOME/.cargo/bin"
+    displayName: Install Rust
+    condition: ne(variables['Agent.OS'], 'Windows_NT')
+
+  - script: |
+      choco install rustup.install -y
+      echo "##vso[task.prependpath]C:\Users\VssAdministrator\.cargo\bin"
+    displayName: Install Rust (Windows)
+    condition: eq(variables['Agent.OS'], 'Windows_NT')
+
+  - script: rustup target add $(target)
+    displayName: Add build target
+
+  - script: cargo build --release --target $(target)
+    displayName: Build release
+
+  - publish: target/$(target)/release/
+    artifact: cert-gen-tools-$(target)
+    displayName: Publish artifact
