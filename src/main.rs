@@ -1,5 +1,6 @@
 mod openssl_utils;
 mod sectigo;
+mod tls_check;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -283,7 +284,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
             .item(5, "View Certificate Details", "Display details of an existing certificate")
             .item(6, "View CSR Details", "Display details of an existing CSR")
             .item(7, "List SSL Profiles", "View available SSL certificate types")
-            .item(8, "Exit", "Close the application")
+            .item(8, "Verify HTTPS Endpoint", "Check TLS cert and protocol for an HTTPS server")
+            .item(9, "Verify LDAPS Endpoint", "Check TLS cert and protocol for an LDAPS server")
+            .item(10, "Exit", "Close the application")
             .interact()?;
 
         match selection {
@@ -506,6 +509,40 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     }
                     Err(e) => {
                         eprintln!("Error fetching SSL profiles: {}", e);
+                    }
+                }
+            }
+            8 => {
+                let host: String = input("Hostname (e.g. example.com)").interact()?;
+                let port_str: String = input("Port")
+                    .default_input("443")
+                    .interact()?;
+                let port: u16 = port_str.parse().unwrap_or(443);
+
+                println!("\nConnecting to {}:{}...", host, port);
+                match tls_check::connect_and_check(&host, port) {
+                    Ok(result) => {
+                        tls_check::display_tls_check_result(&result, "HTTPS Endpoint Verification");
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                    }
+                }
+            }
+            9 => {
+                let host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
+                let port_str: String = input("Port")
+                    .default_input("636")
+                    .interact()?;
+                let port: u16 = port_str.parse().unwrap_or(636);
+
+                println!("\nConnecting to {}:{}...", host, port);
+                match tls_check::connect_and_check(&host, port) {
+                    Ok(result) => {
+                        tls_check::display_tls_check_result(&result, "LDAPS Endpoint Verification");
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
                     }
                 }
             }
