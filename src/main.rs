@@ -78,6 +78,11 @@ enum Commands {
         #[arg(short, long)]
         input: String,
     },
+    /// View contents of a PFX/PKCS12 file (certificate, chain, and key info)
+    ViewPfx {
+        #[arg(short, long)]
+        input: String,
+    },
     /// Verify TLS certificate and protocol for an HTTPS endpoint
     VerifyHttps {
         #[arg(short = 'H', long)]
@@ -95,7 +100,7 @@ enum Commands {
 }
 
 /// Helper function to display certificate chain details
-fn display_cert_chain(cert_content: &str, title: &str) {
+fn display_cert_chain(cert_content: &[u8], title: &str) {
     match openssl_utils::extract_cert_chain_details(cert_content) {
         Ok(cert_chain) => {
             if cert_chain.len() == 1 {
@@ -150,6 +155,59 @@ fn display_cert_chain(cert_content: &str, title: &str) {
         }
         Err(e) => {
             eprintln!("Error: Could not extract certificate details: {}", e);
+        }
+    }
+}
+
+/// Helper function to display a pre-parsed list of certificate details
+fn display_cert_details_list(cert_chain: &[openssl_utils::CertDetails], title: &str) {
+    if cert_chain.len() == 1 {
+        println!("\n╔═══════════════════════════════════════════════════════════════╗");
+        println!("║  {:^61}  ║", title);
+        println!("╚═══════════════════════════════════════════════════════════════╝\n");
+
+        let details = &cert_chain[0];
+        println!("  CommonName: {}", details.common_name);
+        println!("  Issuer: {}", details.issuer);
+        println!("  Valid From: {}", details.not_before);
+        println!("  Valid Until: {}", details.not_after);
+
+        if details.sans.is_empty() {
+            println!("  SANs: None");
+        } else {
+            println!("  SANs:");
+            for san in &details.sans {
+                println!("    • {}", san);
+            }
+        }
+        println!();
+    } else {
+        println!("\n╔═══════════════════════════════════════════════════════════════╗");
+        println!("║  {:^61}  ║", format!("{} ({} certs)", title, cert_chain.len()));
+        println!("╚═══════════════════════════════════════════════════════════════╝\n");
+
+        for (idx, details) in cert_chain.iter().enumerate() {
+            let cert_type = if idx == 0 {
+                "Leaf Certificate"
+            } else if idx == cert_chain.len() - 1 {
+                "Root / Top of Chain"
+            } else {
+                "Intermediate Certificate"
+            };
+
+            println!("┌─ Certificate #{} - {} ─────────────────────────", idx + 1, cert_type);
+            println!("│  CommonName: {}", details.common_name);
+            println!("│  Issuer: {}", details.issuer);
+            println!("│  Valid From: {}", details.not_before);
+            println!("│  Valid Until: {}", details.not_after);
+
+            if !details.sans.is_empty() {
+                println!("│  SANs:");
+                for san in &details.sans {
+                    println!("│    • {}", san);
+                }
+            }
+            println!("└────────────────────────────────────────────────────────────────\n");
         }
     }
 }
@@ -254,7 +312,7 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             println!("Success: OpenSSL config written to {}", out);
         }
         Commands::ViewCert { input } => {
-            let cert_content = std::fs::read_to_string(&input)?;
+            let cert_content = std::fs::read(&input)?;
             display_cert_chain(&cert_content, "Certificate Details");
         }
         Commands::ViewCsr { input } => {
@@ -278,6 +336,18 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("Error: Could not extract CSR details: {}", e);
+                }
+            }
+        }
+        Commands::ViewPfx { input } => {
+            let pfx_bytes = std::fs::read(&input)?;
+            let pfx_pass: String = password("Enter PFX password").interact()?;
+            match openssl_utils::extract_pfx_details(&pfx_bytes, &pfx_pass) {
+                Ok(cert_chain) => {
+                    display_cert_details_list(&cert_chain, "PFX Contents");
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
                 }
             }
         }
@@ -319,10 +389,11 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
             .item(4, "Generate Config from Cert/CSR", "Create a .cnf file from existing data")
             .item(5, "View Certificate Details", "Display details of an existing certificate")
             .item(6, "View CSR Details", "Display details of an existing CSR")
-            .item(7, "List SSL Profiles", "View available SSL certificate types")
-            .item(8, "Verify HTTPS Endpoint", "Check TLS cert and protocol for an HTTPS server")
-            .item(9, "Verify LDAPS Endpoint", "Check TLS cert and protocol for an LDAPS server")
-            .item(10, "Exit", "Close the application")
+            .item(7, "View PFX Contents", "Display certs and chain inside a PFX/PKCS12 file")
+            .item(8, "List SSL Profiles", "View available SSL certificate types")
+            .item(9, "Verify HTTPS Endpoint", "Check TLS cert and protocol for an HTTPS server")
+            .item(10, "Verify LDAPS Endpoint", "Check TLS cert and protocol for an LDAPS server")
+            .item(11, "Exit", "Close the application")
             .interact()?;
 
         match selection {
@@ -430,7 +501,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let cert_content = sectigo::enroll_and_collect(&config, &csr, &out, desc_opt, selected_code, debug)?;
                 
                 // Display certificate details
-                display_cert_chain(&cert_content, "Downloaded Certificate Details");
+                display_cert_chain(cert_content.as_bytes(), "Downloaded Certificate Details");
                 
                 println!("Success: Certificate saved to {}", out);
             }
@@ -485,8 +556,8 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
             }
             5 => {
                 let input_path: String = input("Path to certificate file (.crt, .cer, .pem)").interact()?;
-                
-                match std::fs::read_to_string(&input_path) {
+
+                match std::fs::read(&input_path) {
                     Ok(cert_content) => {
                         display_cert_chain(&cert_content, "Certificate Details");
                     }
@@ -522,6 +593,26 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 }
             }
             7 => {
+                let input_path: String = input("Path to PFX file (.pfx, .p12)").interact()?;
+                let pfx_pass: String = password("Enter PFX password").interact()?;
+
+                match std::fs::read(&input_path) {
+                    Ok(pfx_bytes) => {
+                        match openssl_utils::extract_pfx_details(&pfx_bytes, &pfx_pass) {
+                            Ok(cert_chain) => {
+                                display_cert_details_list(&cert_chain, "PFX Contents");
+                            }
+                            Err(e) => {
+                                eprintln!("Error: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading file: {}", e);
+                    }
+                }
+            }
+            8 => {
                 let config = sectigo::SectigoConfig::default();
                 match sectigo::list_ssl_profiles(&config, debug) {
                     Ok(profiles) => {
@@ -548,7 +639,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     }
                 }
             }
-            8 => {
+            9 => {
                 let host: String = input("Hostname (e.g. example.com)").interact()?;
                 let port_str: String = input("Port")
                     .default_input("443")
@@ -565,7 +656,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     }
                 }
             }
-            9 => {
+            10 => {
                 let host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
                 let port_str: String = input("Port")
                     .default_input("636")

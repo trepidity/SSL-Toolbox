@@ -209,10 +209,14 @@ pub struct CertDetails {
     pub issuer: String,
 }
 
-pub fn extract_cert_chain_details(cert_file_content: &str) -> Result<Vec<CertDetails>> {
-    let all_certs = X509::stack_from_pem(cert_file_content.as_bytes())
-        .context("Failed to parse certificate file")?;
-    
+pub fn extract_cert_chain_details(cert_file_content: &[u8]) -> Result<Vec<CertDetails>> {
+    // Try PEM first, then fall back to DER (single cert)
+    let all_certs = X509::stack_from_pem(cert_file_content)
+        .or_else(|_| {
+            X509::from_der(cert_file_content).map(|cert| vec![cert])
+        })
+        .context("Failed to parse certificate file (tried PEM and DER)")?;
+
     if all_certs.is_empty() {
         return Err(anyhow::anyhow!("No certificates found in file"));
     }
@@ -431,6 +435,91 @@ pub fn extract_cert_details(cert_content: &str) -> Result<CertDetails> {
         not_after,
         issuer: issuer_cn,
     })
+}
+
+pub fn extract_pfx_details(pfx_bytes: &[u8], password: &str) -> Result<Vec<CertDetails>> {
+    let pkcs12 = Pkcs12::from_der(pfx_bytes)
+        .context("Failed to parse PFX/PKCS12 file")?;
+
+    let parsed = pkcs12.parse2(password)
+        .context("Failed to decrypt PFX (wrong password?)")?;
+
+    let mut details = Vec::new();
+
+    // Leaf certificate
+    if let Some(cert) = &parsed.cert {
+        details.push(x509_to_cert_details(cert));
+    }
+
+    // CA chain certificates
+    if let Some(ca_stack) = &parsed.ca {
+        for cert in ca_stack {
+            details.push(x509_to_cert_details(cert));
+        }
+    }
+
+    if details.is_empty() {
+        return Err(anyhow::anyhow!("No certificates found in PFX file"));
+    }
+
+    Ok(details)
+}
+
+fn x509_to_cert_details(cert: &openssl::x509::X509Ref) -> CertDetails {
+    let subject = cert.subject_name();
+    let common_name = subject.entries()
+        .find(|entry| entry.object().nid() == Nid::COMMONNAME)
+        .and_then(|entry| entry.data().as_utf8().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+
+    let mut sans = Vec::new();
+    if let Some(san_ext) = cert.subject_alt_names() {
+        for n in san_ext {
+            if let Some(dns) = n.dnsname() {
+                sans.push(format!("DNS: {}", dns));
+            } else if let Some(ip) = n.ipaddress() {
+                let addr = match ip.len() {
+                    4 => IpAddr::V4(std::net::Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3])),
+                    16 => {
+                        let mut octets = [0u8; 16];
+                        octets.copy_from_slice(ip);
+                        IpAddr::V6(std::net::Ipv6Addr::from(octets))
+                    }
+                    _ => continue,
+                };
+                sans.push(format!("IP: {}", addr));
+            } else if let Some(email) = n.email() {
+                sans.push(format!("Email: {}", email));
+            } else if let Some(uri) = n.uri() {
+                sans.push(format!("URI: {}", uri));
+            }
+        }
+    }
+
+    let not_before = cert.not_before().to_string();
+    let not_after = cert.not_after().to_string();
+
+    let issuer = cert.issuer_name();
+    let issuer_cn = issuer.entries()
+        .find(|entry| entry.object().nid() == Nid::COMMONNAME)
+        .and_then(|entry| entry.data().as_utf8().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            issuer.entries()
+                .find(|entry| entry.object().nid() == Nid::ORGANIZATIONNAME)
+                .and_then(|entry| entry.data().as_utf8().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "Unknown".to_string())
+        });
+
+    CertDetails {
+        common_name,
+        sans,
+        not_before,
+        not_after,
+        issuer: issuer_cn,
+    }
 }
 
 pub fn extract_csr_details(csr_file: &str) -> Result<(String, Vec<String>)> {
