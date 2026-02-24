@@ -25,9 +25,10 @@ steps:
     displayName: Install Rust
     condition: ne(variables['Agent.OS'], 'Windows_NT')
 
-  - script: |
-      choco install rustup.install -y
-      echo "##vso[task.prependpath]C:\Users\VssAdministrator\.cargo\bin"
+  - powershell: |
+      Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+      .\rustup-init.exe -y --default-toolchain stable
+      echo "##vso[task.prependpath]$env:USERPROFILE\.cargo\bin"
     displayName: Install Rust (Windows)
     condition: eq(variables['Agent.OS'], 'Windows_NT')
 
