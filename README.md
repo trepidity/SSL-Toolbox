@@ -51,7 +51,15 @@ cargo build --release -p ssl-toolbox --no-default-features
 
 ### Pre-built Binaries
 
-CI builds are available for Linux (x86_64), Windows (MSVC x86_64), and macOS (x86_64) via Azure Pipelines on tagged releases.
+Download binaries from [GitHub Releases](../../releases/latest). Each release includes archives for:
+
+- Linux x86_64 (`x86_64-unknown-linux-gnu`)
+- Linux aarch64 (`aarch64-unknown-linux-gnu`)
+- Windows x86_64 (`x86_64-pc-windows-msvc`)
+- macOS x86_64 (`x86_64-apple-darwin`)
+- macOS Apple Silicon (`aarch64-apple-darwin`)
+
+A `sha256sums.txt` file is attached to every release for verification.
 
 ## Configuration
 
