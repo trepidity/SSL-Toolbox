@@ -35,9 +35,12 @@ steps:
   - script: rustup target add $(target)
     displayName: Add build target
 
-  - script: cargo build --release --target $(target)
-    displayName: Build release
+  - script: cargo build --release --target $(target) -p ssl-toolbox
+    displayName: Build release (with Sectigo)
+
+  - script: cargo check -p ssl-toolbox --no-default-features
+    displayName: Check build without CA plugin
 
   - publish: target/$(target)/release/
-    artifact: cert-gen-tools-$(target)
+    artifact: ssl-toolbox-$(target)
     displayName: Publish artifact
