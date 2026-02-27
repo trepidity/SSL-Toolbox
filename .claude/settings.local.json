@@ -12,7 +12,9 @@
       "Bash(/usr/bin/python3:*)",
       "Bash(node:*)",
       "Bash(cargo check:*)",
-      "Bash(pip3 install:*)"
+      "Bash(pip3 install:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo:*)"
     ]
   }
 }
