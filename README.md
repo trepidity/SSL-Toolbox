@@ -1,276 +1,148 @@
 # ssl-toolbox
 
-A Rust-based command-line tool for managing SSL/TLS certificates. Supports generating keys and CSRs, creating PFX/PKCS12 files, verifying TLS endpoints, converting certificate formats, and optionally integrating with the Sectigo Certificate Manager API.
+A cross-platform CLI for SSL/TLS certificate management. Generate keys and CSRs, build PFX files, verify TLS endpoints, convert between certificate formats, and optionally submit to Sectigo Certificate Manager -- all from a single binary with no runtime dependencies.
 
 ## Features
 
-- **Generate Keys and CSRs** - Create RSA private keys and certificate signing requests
-- **PFX Creation** - Combine private keys and certificates into PFX/PKCS12 files (modern and legacy TripleDES-SHA1)
-- **Certificate Viewing** - Inspect certificates, CSRs, and PFX files
-- **TLS Verification** - Check HTTPS, LDAPS, and SMTP STARTTLS endpoints
-- **Format Conversion** - Convert between PEM, DER, and Base64
-- **Format Detection** - Auto-identify certificate file formats
-- **Config Generation** - Build OpenSSL config files from scratch or from existing certs/CSRs
-- **CA Integration** - Submit CSRs to Sectigo Certificate Manager and retrieve signed certificates (optional, feature-gated)
+| Category | Capabilities |
+|---|---|
+| **Key & CSR** | Generate RSA 2048 private keys (AES-256-CBC encrypted) and CSRs with SANs (DNS, IP, email, URI) |
+| **PFX/PKCS12** | Create modern (AES-256-SHA256) or legacy (TripleDES-SHA1) PFX files; convert between formats; inspect contents |
+| **TLS Verification** | Probe HTTPS, LDAPS, and SMTP STARTTLS endpoints; report negotiated cipher, TLS version support (1.0-1.3), and validate hostname/expiry/chain |
+| **Format Tools** | Convert between PEM, DER, and Base64; auto-detect certificate file formats |
+| **Config Generation** | Build OpenSSL `.cnf` files interactively or extract them from existing certificates and CSRs |
+| **CA Integration** | Submit CSRs to Sectigo SCM, list certificate profiles, and download signed certificates (feature-gated, optional) |
 
-## Prerequisites
+## Quick Start
 
-- Rust 1.85+ (edition 2024)
+```bash
+# Build
+cargo build --release
+
+# Set up your organization defaults
+./target/release/ssl-toolbox init
+# Edit .ssl-toolbox/config.json with your org info
+
+# Run the interactive menu
+./target/release/ssl-toolbox
+
+# Or use CLI commands directly
+./target/release/ssl-toolbox new-config --out server.cnf
+./target/release/ssl-toolbox generate --conf server.cnf --key server.key --csr server.csr
+```
 
 ## Installation
 
 ### Build from Source
 
+Requires Rust 1.85+ (edition 2024). OpenSSL is vendored -- no system OpenSSL needed.
+
 ```bash
-cargo build --release
+cargo build --release -p ssl-toolbox
 ```
 
-The compiled binary will be available at `target/release/ssl-toolbox`.
+Binary: `target/release/ssl-toolbox`
 
-To build without Sectigo CA support:
+Build without Sectigo CA support:
 
 ```bash
 cargo build --release -p ssl-toolbox --no-default-features
 ```
 
+### Pre-built Binaries
+
+CI builds are available for Linux (x86_64), Windows (MSVC x86_64), and macOS (x86_64) via Azure Pipelines on tagged releases.
+
 ## Configuration
 
-ssl-toolbox uses a layered config system. Values are resolved in order (later wins):
+ssl-toolbox uses layered configuration. Values resolve in order (later wins):
 
 1. Compiled defaults (empty strings)
-2. `~/.ssl-toolbox/` (user-level defaults)
-3. `./.ssl-toolbox/` (project-level overrides)
-4. Environment variables / `.env` file
+2. `~/.ssl-toolbox/*.json` (user-level)
+3. `./.ssl-toolbox/*.json` (project-level)
+4. Environment variables / `.env`
 5. CLI flags
 
-### Quick Start
+Run `ssl-toolbox init` to generate template config files, or `ssl-toolbox init --global` for `~/.ssl-toolbox/`.
 
-```bash
-# Generate config files in the current directory
-ssl-toolbox init
-
-# Or generate global config files in ~/.ssl-toolbox/
-ssl-toolbox init --global
-```
-
-This creates two files:
-
-**`.ssl-toolbox/config.json`** - CSR profile defaults:
+**`.ssl-toolbox/config.json`** -- CSR defaults used by interactive prompts:
 
 ```json
 {
   "country": "US",
-  "state": "",
-  "locality": "",
-  "organization": "",
-  "org_unit": "",
-  "email": ""
+  "state": "Texas",
+  "locality": "Dallas",
+  "organization": "Acme Corp",
+  "org_unit": "Engineering",
+  "email": "certs@acme.com"
 }
 ```
 
-**`.ssl-toolbox/sectigo.json`** - Sectigo plugin config (only needed if using CA features):
+**`.ssl-toolbox/sectigo.json`** -- Sectigo plugin settings (only for CA features):
 
 ```json
 {
   "api_base": "https://cert-manager.com",
-  "org_id": "",
-  "product_code": "",
-  "token_url": ""
+  "org_id": "12345",
+  "product_code": "4491",
+  "token_url": "https://auth.sso.sectigo.com/auth/realms/apiclients/protocol/openid-connect/token"
 }
 ```
 
-### Sectigo Credentials
-
-Secrets must be stored in a `.env` file (never in JSON config files):
+Sectigo OAuth secrets go in `.env` (never in JSON):
 
 ```env
 SCM_CLIENT_ID=<your client id>
 SCM_CLIENT_SECRET=<your client secret>
 ```
 
-## Usage
+## Command Reference
 
-### Interactive Mode
+| Command | Description |
+|---|---|
+| *(no args)* | Launch interactive menu |
+| `init [--global]` | Generate template config files |
+| `generate --conf FILE --key FILE --csr FILE [--password PASS]` | Generate RSA key and CSR |
+| `new-config [--out FILE]` | Build OpenSSL config interactively |
+| `config --input FILE --out FILE [--is-csr]` | Extract config from cert or CSR |
+| `pfx --key FILE --cert FILE --out FILE [--chain FILE] [--legacy]` | Create PFX file |
+| `pfx-legacy --input FILE --out FILE` | Convert PFX to legacy TripleDES-SHA1 |
+| `view-cert --input FILE` | Display certificate details |
+| `view-csr --input FILE` | Display CSR details |
+| `view-pfx --input FILE` | Display PFX contents |
+| `verify-https --host HOST [--port PORT] [--no-verify]` | Check HTTPS endpoint |
+| `verify-ldaps --host HOST [--port PORT] [--no-verify]` | Check LDAPS endpoint |
+| `verify-smtp --host HOST [--port PORT] [--no-verify]` | Check SMTP STARTTLS endpoint |
+| `convert --input FILE --output FILE --format FORMAT` | Convert cert format (pem/der/base64) |
+| `identify --input FILE` | Auto-detect certificate format |
+| `ca list-profiles` | List available Sectigo cert types |
+| `ca submit --csr FILE --out FILE [--description TEXT] [--product-code CODE]` | Submit CSR to Sectigo |
+| `ca collect --id ID --out FILE [--format FORMAT]` | Download signed cert (pem/chain/pkcs7) |
 
-Run without arguments to enter interactive mode:
+All commands accept the global `--debug` flag for verbose output.
 
-```bash
-ssl-toolbox
+For detailed usage of every command, see [docs/USER_MANUAL.md](docs/USER_MANUAL.md).
+
+## Architecture
+
+```
+ssl-toolbox (workspace)
+  crates/
+    ssl-toolbox/           CLI binary: clap commands, interactive menu, display
+    ssl-toolbox-core/      Library: key/CSR gen, PFX, TLS, SMTP, validation, convert, config
+    ssl-toolbox-ca/        CA plugin trait (CaPlugin, CertProfile, SubmitOptions)
+    ssl-toolbox-ca-sectigo/ Sectigo SCM implementation (feature-gated)
 ```
 
-### Command-Line Mode
-
-#### Initialize Config
-
-```bash
-ssl-toolbox init            # project-level .ssl-toolbox/
-ssl-toolbox init --global   # user-level ~/.ssl-toolbox/
-```
-
-#### Generate Key and CSR
-
-```bash
-ssl-toolbox generate \
-  --conf openssl.conf \
-  --key output.key \
-  --csr output.csr \
-  --password <key-password>
-```
-
-#### Generate New OpenSSL Config
-
-```bash
-ssl-toolbox new-config --out server.cnf
-```
-
-#### Generate Config from Existing Certificate
-
-```bash
-ssl-toolbox config \
-  --input certificate.crt \
-  --out openssl.conf \
-  --is-csr  # include if input is a CSR instead of certificate
-```
-
-#### Create PFX File
-
-```bash
-ssl-toolbox pfx \
-  --key output.key \
-  --cert signed.crt \
-  --out certificate.pfx \
-  --chain chain.crt    # optional
-  --legacy             # optional: use TripleDES-SHA1
-```
-
-#### Convert Legacy PFX
-
-```bash
-ssl-toolbox pfx-legacy --input modern.pfx --out legacy.pfx
-```
-
-#### View Certificate / CSR / PFX Details
-
-```bash
-ssl-toolbox view-cert --input certificate.crt
-ssl-toolbox view-csr --input request.csr
-ssl-toolbox view-pfx --input certificate.pfx
-```
-
-#### Convert Certificate Format
-
-```bash
-ssl-toolbox convert --input cert.pem --output cert.der --format der
-ssl-toolbox convert --input cert.der --output cert.pem --format pem
-ssl-toolbox convert --input cert.pem --output cert.b64 --format base64
-```
-
-#### Identify Certificate Format
-
-```bash
-ssl-toolbox identify --input certificate.crt
-```
-
-#### Verify TLS Endpoints
-
-```bash
-ssl-toolbox verify-https --host example.com --port 443
-ssl-toolbox verify-ldaps --host ldap.example.com --port 636
-ssl-toolbox verify-smtp --host smtp.example.com --port 587
-```
-
-#### CA Operations (requires Sectigo feature)
-
-```bash
-ssl-toolbox ca list-profiles
-ssl-toolbox ca submit --csr request.csr --out signed.crt --description "Production cert"
-ssl-toolbox ca collect --id 12345 --out cert.crt --format pem
-```
-
-## OpenSSL Configuration Format
-
-The tool expects OpenSSL configuration files with the following structure:
-
-```ini
-[ req ]
-
-[ req_distinguished_name ]
-C = US
-ST = Your State
-L = Your City
-O = Your Organization
-OU = IT Department
-CN = example.com
-
-[ v3_req ]
-subjectAltName = @alt_names
-
-[ alt_names ]
-DNS.1 = example.com
-DNS.2 = www.example.com
-IP.1 = 192.168.1.1
-```
-
-## Complete Workflow Example
-
-```bash
-# 1. Initialize config with your org defaults
-ssl-toolbox init
-# Edit .ssl-toolbox/config.json with your organization info
-
-# 2. Generate key and CSR (prompts will use your configured defaults)
-ssl-toolbox new-config --out config/server.cnf
-ssl-toolbox generate \
-  --conf config/server.cnf \
-  --key data/server.key \
-  --csr data/server.csr
-
-# 3. Submit to Sectigo and get signed certificate
-ssl-toolbox ca submit \
-  --csr data/server.csr \
-  --out data/server.crt \
-  --description "Production web server certificate"
-
-# 4. Create PFX for deployment
-ssl-toolbox pfx \
-  --key data/server.key \
-  --cert data/server.crt \
-  --out data/server.pfx
-```
-
-## Troubleshooting
-
-### "Private key is encrypted but no password was provided"
-- Ensure you enter the correct password when prompted for the private key password
-- If your key is not encrypted, simply press Enter when prompted
-
-### "Key values mismatch" error
-- Verify that the certificate and private key match
-- Check that you're using the correct certificate (end-entity, not intermediate/root)
-
-### Certificate chain issues
-- The tool automatically handles multi-certificate files
-- Ensure your `.crt` file contains the full chain if not providing a separate `--chain` file
+The `sectigo` feature is on by default. Disable it with `--no-default-features` for a standalone tool with no CA dependencies.
 
 ## Development
 
-### Build
-
 ```bash
-cargo build
-```
-
-### Type Check
-
-```bash
-cargo check --workspace
-cargo check -p ssl-toolbox --no-default-features  # verify sans-Sectigo build
-```
-
-### Run with Debug Output
-
-```bash
-ssl-toolbox --debug
+cargo check --workspace                          # type-check all crates
+cargo check -p ssl-toolbox --no-default-features # verify sans-Sectigo build
+cargo test --workspace                           # run tests
+cargo build --release -p ssl-toolbox             # release binary
 ```
 
 ## License
