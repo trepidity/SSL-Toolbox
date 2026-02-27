@@ -4,7 +4,15 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(cargo build:*)",
-      "Bash(cargo run:*)"
+      "Bash(cargo run:*)",
+      "WebSearch",
+      "WebFetch(domain:www.arroyo.dev)",
+      "WebFetch(domain:nullderef.com)",
+      "Bash(python3:*)",
+      "Bash(/usr/bin/python3:*)",
+      "Bash(node:*)",
+      "Bash(cargo check:*)",
+      "Bash(pip3 install:*)"
     ]
   }
 }
