@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use ssl_toolbox_ca::{CaPlugin, CertProfile, CollectFormat, SubmitOptions};
 use std::env;
@@ -48,23 +48,22 @@ impl SectigoPlugin {
     /// Create and configure a SectigoPlugin from a config struct.
     /// Environment variables override config values where set.
     pub fn configure_with_config(config: &SectigoConfig, debug: bool) -> Result<Box<dyn CaPlugin>> {
-        let scm_client_id = env::var("SCM_CLIENT_ID")
-            .context("SCM_CLIENT_ID not set. Check .env file.")?;
-        let scm_client_secret = env::var("SCM_CLIENT_SECRET")
-            .context("SCM_CLIENT_SECRET not set. Check .env file.")?;
+        let scm_client_id =
+            env::var("SCM_CLIENT_ID").context("SCM_CLIENT_ID not set. Check .env file.")?;
+        let scm_client_secret =
+            env::var("SCM_CLIENT_SECRET").context("SCM_CLIENT_SECRET not set. Check .env file.")?;
 
-        let scm_token_url = env::var("SCM_TOKEN_URL")
-            .unwrap_or_else(|_| config.token_url.clone());
+        let scm_token_url = env::var("SCM_TOKEN_URL").unwrap_or_else(|_| config.token_url.clone());
         if scm_token_url.is_empty() {
-            return Err(anyhow!("SCM_TOKEN_URL not set. Set it in .env or .ssl-toolbox/sectigo.json"));
+            return Err(anyhow!(
+                "SCM_TOKEN_URL not set. Set it in .env or .ssl-toolbox/sectigo.json"
+            ));
         }
 
-        let api_base = env::var("SECTIGO_API_BASE")
-            .unwrap_or_else(|_| config.api_base.clone());
-        let org_id = env::var("SECTIGO_ORG_ID")
-            .unwrap_or_else(|_| config.org_id.clone());
-        let default_product_code = env::var("SECTIGO_PRODUCT_CODE")
-            .unwrap_or_else(|_| config.product_code.clone());
+        let api_base = env::var("SECTIGO_API_BASE").unwrap_or_else(|_| config.api_base.clone());
+        let org_id = env::var("SECTIGO_ORG_ID").unwrap_or_else(|_| config.org_id.clone());
+        let default_product_code =
+            env::var("SECTIGO_PRODUCT_CODE").unwrap_or_else(|_| config.product_code.clone());
 
         if debug {
             println!("DEBUG: Configuring Sectigo plugin");
@@ -112,8 +111,7 @@ impl SectigoPlugin {
             return Err(anyhow!("HTTP status {} - {}", status, body));
         }
 
-        let token_res: TokenResponse =
-            response.json().context("Failed to parse token response")?;
+        let token_res: TokenResponse = response.json().context("Failed to parse token response")?;
         Ok(token_res.access_token)
     }
 
@@ -168,10 +166,7 @@ impl CaPlugin for SectigoPlugin {
         let body_text = response.text().context("Failed to read response body")?;
 
         let profiles: Vec<SectigoSslProfile> = serde_json::from_str(&body_text).context(
-            format!(
-                "Failed to parse SSL profiles response. Body: {}",
-                body_text
-            ),
+            format!("Failed to parse SSL profiles response. Body: {}", body_text),
         )?;
 
         Ok(profiles
@@ -185,12 +180,7 @@ impl CaPlugin for SectigoPlugin {
             .collect())
     }
 
-    fn submit_csr(
-        &self,
-        csr_pem: &str,
-        options: &SubmitOptions,
-        debug: bool,
-    ) -> Result<String> {
+    fn submit_csr(&self, csr_pem: &str, options: &SubmitOptions, debug: bool) -> Result<String> {
         let stripped_csr = Self::strip_csr(csr_pem);
 
         println!("Authenticating with Sectigo SCM...");
@@ -224,7 +214,10 @@ impl CaPlugin for SectigoPlugin {
         };
 
         if debug {
-            println!("DEBUG: Selected profile: {} (ID: {})", profile.name, profile.id);
+            println!(
+                "DEBUG: Selected profile: {} (ID: {})",
+                profile.name, profile.id
+            );
             println!("DEBUG: Available terms: {:?}", profile.terms);
             println!("DEBUG: Selected term: {} days", term_days);
         }
@@ -300,12 +293,7 @@ impl CaPlugin for SectigoPlugin {
         Ok(ssl_id.to_string())
     }
 
-    fn collect_cert(
-        &self,
-        request_id: &str,
-        format: CollectFormat,
-        debug: bool,
-    ) -> Result<String> {
+    fn collect_cert(&self, request_id: &str, format: CollectFormat, debug: bool) -> Result<String> {
         let token = self.get_token(debug)?;
 
         let client = reqwest::blocking::Client::builder()

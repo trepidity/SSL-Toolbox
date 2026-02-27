@@ -7,8 +7,8 @@ use openssl::stack::Stack;
 use openssl::x509::X509;
 use std::fs;
 
-use crate::x509_utils::x509_to_cert_details;
 use crate::CertDetails;
+use crate::x509_utils::x509_to_cert_details;
 
 /// Create a PFX/PKCS12 file from a private key, certificate, and optional chain.
 pub fn create_pfx(
@@ -36,8 +36,7 @@ pub fn create_pfx(
         }
     };
 
-    let all_certs =
-        X509::stack_from_pem(&cert_pem).context("Failed to parse certificate file")?;
+    let all_certs = X509::stack_from_pem(&cert_pem).context("Failed to parse certificate file")?;
 
     if all_certs.is_empty() {
         return Err(anyhow::anyhow!("No certificates found in cert file"));
@@ -180,8 +179,7 @@ pub fn create_pfx_legacy(
         }
     };
 
-    let all_certs =
-        X509::stack_from_pem(&cert_pem).context("Failed to parse certificate file")?;
+    let all_certs = X509::stack_from_pem(&cert_pem).context("Failed to parse certificate file")?;
 
     if all_certs.is_empty() {
         return Err(anyhow::anyhow!("No certificates found in cert file"));

@@ -13,12 +13,7 @@ pub trait CaPlugin: Send + Sync {
     fn submit_csr(&self, csr_pem: &str, options: &SubmitOptions, debug: bool) -> Result<String>;
 
     /// Collect/download a signed certificate by its request ID.
-    fn collect_cert(
-        &self,
-        request_id: &str,
-        format: CollectFormat,
-        debug: bool,
-    ) -> Result<String>;
+    fn collect_cert(&self, request_id: &str, format: CollectFormat, debug: bool) -> Result<String>;
 }
 
 /// A certificate profile offered by the CA.

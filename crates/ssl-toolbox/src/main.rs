@@ -179,8 +179,7 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "sectigo")]
 fn get_ca_plugin(debug: bool) -> Result<Box<dyn ssl_toolbox_ca::CaPlugin>> {
-    let sectigo_config: ssl_toolbox_ca_sectigo::SectigoConfig =
-        settings::load_ca_config("sectigo");
+    let sectigo_config: ssl_toolbox_ca_sectigo::SectigoConfig = settings::load_ca_config("sectigo");
     ssl_toolbox_ca_sectigo::SectigoPlugin::configure_with_config(&sectigo_config, debug)
 }
 
@@ -214,7 +213,9 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             chain,
             legacy,
         } => {
-            println!("Note: If your private key is encrypted, you'll be prompted for its password.");
+            println!(
+                "Note: If your private key is encrypted, you'll be prompted for its password."
+            );
             println!("If not encrypted, just press Enter when prompted.");
             let key_pass: String =
                 password("Enter password for private key (or press Enter if not encrypted)")
@@ -327,15 +328,9 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             display::display_cert_chain(&cert_content, "Certificate Details");
         }
         Commands::ViewCsr { input } => {
-            println!(
-                "\n╔═══════════════════════════════════════════════════════════════╗"
-            );
-            println!(
-                "║                        CSR Details                           ║"
-            );
-            println!(
-                "╚═══════════════════════════════════════════════════════════════╝\n"
-            );
+            println!("\n╔═══════════════════════════════════════════════════════════════╗");
+            println!("║                        CSR Details                           ║");
+            println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
             match ssl_toolbox_core::key_csr::extract_csr_details(&input) {
                 Ok((cn, sans)) => {
@@ -460,21 +455,18 @@ fn execute_ca_command(
             if profiles.is_empty() {
                 println!("\nNo SSL profiles available.");
             } else {
-                println!(
-                    "\n╔═══════════════════════════════════════════════════════════════╗"
-                );
-                println!(
-                    "║              Available SSL Certificate Types                 ║"
-                );
-                println!(
-                    "╚═══════════════════════════════════════════════════════════════╝\n"
-                );
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║              Available SSL Certificate Types                 ║");
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
                 for profile in profiles {
                     println!("  • {} (ID: {})", profile.name, profile.id);
                     if !profile.terms.is_empty() {
-                        let terms: Vec<String> =
-                            profile.terms.iter().map(|t| format!("{} days", t)).collect();
+                        let terms: Vec<String> = profile
+                            .terms
+                            .iter()
+                            .map(|t| format!("{} days", t))
+                            .collect();
                         println!("    Available terms: {}", terms.join(", "));
                     }
                     println!();
@@ -490,15 +482,9 @@ fn execute_ca_command(
             let csr_content = std::fs::read_to_string(&csr)?;
 
             // Show CSR details before submitting
-            println!(
-                "\n╔═══════════════════════════════════════════════════════════════╗"
-            );
-            println!(
-                "║                    CSR Details Review                        ║"
-            );
-            println!(
-                "╚═══════════════════════════════════════════════════════════════╝\n"
-            );
+            println!("\n╔═══════════════════════════════════════════════════════════════╗");
+            println!("║                    CSR Details Review                        ║");
+            println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
             if let Ok((cn, sans)) = ssl_toolbox_core::key_csr::extract_csr_details(&csr) {
                 println!("  CommonName: {}", cn);
@@ -561,7 +547,11 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
 
     loop {
         let mut menu = select("What would you like to do?")
-            .item(0, "Generate Key and CSR", "Build a new key and CSR from a config file")
+            .item(
+                0,
+                "Generate Key and CSR",
+                "Build a new key and CSR from a config file",
+            )
             .item(1, "Create PFX", "Combine key and cert into a PFX file")
             .item(
                 2,
@@ -677,7 +667,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .initial_value(false)
                     .interact()?;
 
-                println!("Note: If your private key is encrypted, you'll be prompted for its password.");
+                println!(
+                    "Note: If your private key is encrypted, you'll be prompted for its password."
+                );
                 println!("If not encrypted, just press Enter when prompted.");
                 let key_pass: String =
                     password("Enter password for private key (or press Enter if not encrypted)")
@@ -761,7 +753,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let out: String = input("Path to output .conf file").interact()?;
                 let is_csr = input_path.ends_with(".csr");
                 ssl_toolbox_core::config::generate_conf_from_cert_or_csr(
-                    &input_path, &out, is_csr,
+                    &input_path,
+                    &out,
+                    is_csr,
                 )?;
                 println!("Success: OpenSSL config written to {}", out);
             }
@@ -779,15 +773,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
             }
             6 => {
                 let input_path: String = input("Path to CSR file (.csr)").interact()?;
-                println!(
-                    "\n╔═══════════════════════════════════════════════════════════════╗"
-                );
-                println!(
-                    "║                        CSR Details                           ║"
-                );
-                println!(
-                    "╚═══════════════════════════════════════════════════════════════╝\n"
-                );
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║                        CSR Details                           ║");
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
                 match ssl_toolbox_core::key_csr::extract_csr_details(&input_path) {
                     Ok((cn, sans)) => {
                         println!("  CommonName: {}", cn);
@@ -836,10 +824,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 println!("\nConnecting to {}:{}...", host, port);
                 match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
                     Ok(result) => {
-                        display::display_tls_check_result(
-                            &result,
-                            "HTTPS Endpoint Verification",
-                        );
+                        display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
                     }
                     Err(e) => {
                         eprintln!("Error: {}", e);
@@ -857,10 +842,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 println!("\nConnecting to {}:{}...", host, port);
                 match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
                     Ok(result) => {
-                        display::display_tls_check_result(
-                            &result,
-                            "LDAPS Endpoint Verification",
-                        );
+                        display::display_tls_check_result(&result, "LDAPS Endpoint Verification");
                     }
                     Err(e) => {
                         eprintln!("Error: {}", e);
@@ -968,15 +950,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     None
                 };
 
-                println!(
-                    "\n╔═══════════════════════════════════════════════════════════════╗"
-                );
-                println!(
-                    "║                    CSR Details Review                        ║"
-                );
-                println!(
-                    "╚═══════════════════════════════════════════════════════════════╝\n"
-                );
+                println!("\n╔═══════════════════════════════════════════════════════════════╗");
+                println!("║                    CSR Details Review                        ║");
+                println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
                 match ssl_toolbox_core::key_csr::extract_csr_details(&csr) {
                     Ok((cn, sans)) => {
@@ -1189,15 +1165,9 @@ fn prompt_config_inputs(defaults: &CsrDefaults) -> Result<ConfigInputs> {
 }
 
 fn print_config_summary(inputs: &ConfigInputs, output_path: &str) {
-    println!(
-        "\n╔═══════════════════════════════════════════════════════════════╗"
-    );
-    println!(
-        "║                   Config Summary                            ║"
-    );
-    println!(
-        "╚═══════════════════════════════════════════════════════════════╝\n"
-    );
+    println!("\n╔═══════════════════════════════════════════════════════════════╗");
+    println!("║                   Config Summary                            ║");
+    println!("╚═══════════════════════════════════════════════════════════════╝\n");
     println!("  CN:           {}", inputs.common_name);
     println!("  Country:      {}", inputs.country);
     println!("  State:        {}", inputs.state);

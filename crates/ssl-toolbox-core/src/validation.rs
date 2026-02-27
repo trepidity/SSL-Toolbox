@@ -1,7 +1,7 @@
 use openssl::ssl::SslRef;
-use openssl::x509::store::X509StoreBuilder;
-use openssl::x509::{X509StoreContext, X509};
 use openssl::stack::Stack;
+use openssl::x509::store::X509StoreBuilder;
+use openssl::x509::{X509, X509StoreContext};
 
 use crate::{CertValidation, ValidationResult};
 
@@ -46,7 +46,7 @@ fn validate_hostname(ssl: &SslRef, hostname: &str) -> ValidationResult {
             return ValidationResult {
                 passed: false,
                 message: "No peer certificate presented".to_string(),
-            }
+            };
         }
     };
 
@@ -99,7 +99,7 @@ fn validate_expiry(ssl: &SslRef) -> ValidationResult {
             return ValidationResult {
                 passed: false,
                 message: "No peer certificate presented".to_string(),
-            }
+            };
         }
     };
 
@@ -110,7 +110,7 @@ fn validate_expiry(ssl: &SslRef) -> ValidationResult {
             return ValidationResult {
                 passed: false,
                 message: "Failed to get current time".to_string(),
-            }
+            };
         }
     };
 
@@ -146,7 +146,7 @@ fn validate_chain(ssl: &SslRef) -> ValidationResult {
             return ValidationResult {
                 passed: false,
                 message: "No peer certificate presented".to_string(),
-            }
+            };
         }
     };
 
@@ -175,23 +175,23 @@ fn validate_chain(ssl: &SslRef) -> ValidationResult {
             return ValidationResult {
                 passed: false,
                 message: "Failed to create X509 store".to_string(),
-            }
+            };
         }
     };
 
     match X509StoreContext::new() {
         Ok(mut ctx) => {
-            match ctx.init(&store, &cert, &chain, |ctx| Ok(ctx.verify_cert().unwrap_or(false))) {
+            match ctx.init(&store, &cert, &chain, |ctx| {
+                Ok(ctx.verify_cert().unwrap_or(false))
+            }) {
                 Ok(true) => ValidationResult {
                     passed: true,
                     message: "chain verified against system trust store".to_string(),
                 },
-                Ok(false) => {
-                    ValidationResult {
-                        passed: false,
-                        message: "chain verification failed".to_string(),
-                    }
-                }
+                Ok(false) => ValidationResult {
+                    passed: false,
+                    message: "chain verification failed".to_string(),
+                },
                 Err(_) => ValidationResult {
                     passed: false,
                     message: "chain verification error".to_string(),

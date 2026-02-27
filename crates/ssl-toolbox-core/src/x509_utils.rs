@@ -173,7 +173,6 @@ pub fn extract_cert_chain_details(cert_file_content: &[u8]) -> Result<Vec<CertDe
 
 /// Parse a single PEM certificate and return its details.
 pub fn extract_cert_details(cert_content: &str) -> Result<CertDetails> {
-    let cert =
-        X509::from_pem(cert_content.as_bytes()).context("Failed to parse certificate")?;
+    let cert = X509::from_pem(cert_content.as_bytes()).context("Failed to parse certificate")?;
     Ok(x509_to_cert_details(&cert))
 }

@@ -20,19 +20,13 @@ pub fn generate_conf_from_inputs(inputs: &ConfigInputs, output_path: &str) -> Re
 
     config.push_str("\n[ req_distinguished_name ]\n");
     config.push_str(&format!("countryName             = {}\n", inputs.country));
-    config.push_str(&format!(
-        "stateOrProvinceName     = {}\n",
-        inputs.state
-    ));
+    config.push_str(&format!("stateOrProvinceName     = {}\n", inputs.state));
     config.push_str(&format!("localityName            = {}\n", inputs.locality));
     config.push_str(&format!(
         "organizationName        = {}\n",
         inputs.organization
     ));
-    config.push_str(&format!(
-        "organizationalUnitName  = {}\n",
-        inputs.org_unit
-    ));
+    config.push_str(&format!("organizationalUnitName  = {}\n", inputs.org_unit));
     config.push_str(&format!(
         "commonName              = {}\n",
         inputs.common_name

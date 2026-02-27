@@ -30,11 +30,7 @@ fn read_smtp_response(reader: &mut BufReader<&TcpStream>) -> Result<String> {
 }
 
 /// Connect to an SMTP server, perform STARTTLS upgrade, and check the TLS certificate.
-pub fn connect_and_check_smtp(
-    host: &str,
-    port: u16,
-    verify: bool,
-) -> Result<TlsCheckResult> {
+pub fn connect_and_check_smtp(host: &str, port: u16, verify: bool) -> Result<TlsCheckResult> {
     let addr = format!("{}:{}", host, port);
     let socket_addr = addr
         .to_socket_addrs()
@@ -63,10 +59,7 @@ pub fn connect_and_check_smtp(
     (&tcp).flush()?;
     let ehlo_response = read_smtp_response(&mut reader)?;
     if !ehlo_response.starts_with("250") {
-        return Err(anyhow::anyhow!(
-            "EHLO failed: {}",
-            ehlo_response.trim()
-        ));
+        return Err(anyhow::anyhow!("EHLO failed: {}", ehlo_response.trim()));
     }
 
     // Check STARTTLS support

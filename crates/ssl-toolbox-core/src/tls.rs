@@ -87,8 +87,8 @@ pub fn probe_tls_versions(host: &str, port: u16) -> Vec<TlsVersionProbeResult> {
 pub fn connect_and_check(host: &str, port: u16, verify: bool) -> Result<TlsCheckResult> {
     // Default handshake (let OpenSSL negotiate best available)
     // Always connect without verification for probing; we do validation separately
-    let ssl_stream =
-        perform_tls_handshake(host, port, None, None, false).context("Failed to connect to endpoint")?;
+    let ssl_stream = perform_tls_handshake(host, port, None, None, false)
+        .context("Failed to connect to endpoint")?;
 
     let ssl = ssl_stream.ssl();
 

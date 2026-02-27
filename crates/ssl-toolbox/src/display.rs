@@ -15,13 +15,9 @@ pub fn display_cert_chain(cert_content: &[u8], title: &str) {
 /// Display a pre-parsed list of certificate details.
 pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
     if cert_chain.len() == 1 {
-        println!(
-            "\n╔═══════════════════════════════════════════════════════════════╗"
-        );
+        println!("\n╔═══════════════════════════════════════════════════════════════╗");
         println!("║  {:^59}  ║", title);
-        println!(
-            "╚═══════════════════════════════════════════════════════════════╝\n"
-        );
+        println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
         let details = &cert_chain[0];
         println!("  CommonName: {}", details.common_name);
@@ -39,16 +35,12 @@ pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
         }
         println!();
     } else {
-        println!(
-            "\n╔═══════════════════════════════════════════════════════════════╗"
-        );
+        println!("\n╔═══════════════════════════════════════════════════════════════╗");
         println!(
             "║  {:^59}  ║",
             format!("{} ({} certs)", title, cert_chain.len())
         );
-        println!(
-            "╚═══════════════════════════════════════════════════════════════╝\n"
-        );
+        println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
         for (idx, details) in cert_chain.iter().enumerate() {
             let cert_type = if idx == 0 {
@@ -75,22 +67,16 @@ pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
                     println!("│    • {}", san);
                 }
             }
-            println!(
-                "└────────────────────────────────────────────────────────────────\n"
-            );
+            println!("└────────────────────────────────────────────────────────────────\n");
         }
     }
 }
 
 /// Display TLS check results with connection, version support, and certificate chain.
 pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
-    println!(
-        "\n╔═══════════════════════════════════════════════════════════════╗"
-    );
+    println!("\n╔═══════════════════════════════════════════════════════════════╗");
     println!("║  {:^59}  ║", label);
-    println!(
-        "╚═══════════════════════════════════════════════════════════════╝\n"
-    );
+    println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
     println!("  Endpoint: {}:{}", result.host, result.port);
     println!();
@@ -100,9 +86,7 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
     println!("│  Protocol:     {}", result.cipher.protocol);
     println!("│  Cipher Suite: {}", result.cipher.name);
     println!("│  Cipher Bits:  {}", result.cipher.bits);
-    println!(
-        "└────────────────────────────────────────────────────────────────\n"
-    );
+    println!("└────────────────────────────────────────────────────────────────\n");
 
     // TLS version support
     if !result.version_support.is_empty() {
@@ -112,9 +96,7 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
             let marker = if probe.supported { "+" } else { "-" };
             println!("│  [{}] {}: {}", marker, probe.label, status);
         }
-        println!(
-            "└────────────────────────────────────────────────────────────────\n"
-        );
+        println!("└────────────────────────────────────────────────────────────────\n");
     }
 
     // Certificate validation
@@ -163,9 +145,7 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
                 println!("│");
             }
         }
-        println!(
-            "└────────────────────────────────────────────────────────────────\n"
-        );
+        println!("└────────────────────────────────────────────────────────────────\n");
     }
 }
 
@@ -199,7 +179,5 @@ fn display_validation(validation: &CertValidation) {
         );
     }
 
-    println!(
-        "└────────────────────────────────────────────────────────────────\n"
-    );
+    println!("└────────────────────────────────────────────────────────────────\n");
 }

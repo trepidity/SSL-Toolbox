@@ -29,7 +29,9 @@ pub fn detect_format(data: &[u8]) -> CertFormat {
         let trimmed = text.trim();
         if !trimmed.is_empty()
             && !trimmed.contains("-----")
-            && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c.is_whitespace())
+            && trimmed.chars().all(|c| {
+                c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c.is_whitespace()
+            })
         {
             // Verify it actually decodes
             let no_whitespace: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
