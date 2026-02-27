@@ -106,6 +106,8 @@ SCM_CLIENT_SECRET=<your client secret>
 
 ## Command Reference
 
+![ssl-toolbox main menu](assets/ssl-toolbox-main-menu.jpg)
+
 | Command | Description |
 |---|---|
 | *(no args)* | Launch interactive menu |
