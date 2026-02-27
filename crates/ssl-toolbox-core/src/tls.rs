@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::validation::validate_peer_cert;
@@ -49,11 +49,7 @@ pub fn perform_tls_handshake(
     tcp.set_read_timeout(Some(Duration::from_secs(10)))?;
     tcp.set_write_timeout(Some(Duration::from_secs(10)))?;
 
-    let connect_host = if host.parse::<IpAddr>().is_ok() {
-        host
-    } else {
-        host
-    };
+    let connect_host = host;
 
     let ssl_stream = connector
         .connect(connect_host, tcp)

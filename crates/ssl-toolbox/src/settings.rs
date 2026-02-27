@@ -11,10 +11,10 @@ pub fn load_config() -> AppConfig {
 
     for dir in config_dirs() {
         let path = dir.join("config.json");
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(loaded) = serde_json::from_str::<CsrDefaults>(&contents) {
-                merge_csr_defaults(&mut defaults, &loaded);
-            }
+        if let Ok(contents) = std::fs::read_to_string(&path)
+            && let Ok(loaded) = serde_json::from_str::<CsrDefaults>(&contents)
+        {
+            merge_csr_defaults(&mut defaults, &loaded);
         }
     }
 
@@ -31,21 +31,21 @@ pub fn load_ca_config<T: serde::de::DeserializeOwned + Default>(name: &str) -> T
 
     for dir in config_dirs() {
         let path = dir.join(&filename);
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(loaded) = serde_json::from_str::<serde_json::Value>(&contents) {
-                match &mut result {
-                    Some(base) => {
-                        if let (Some(base_obj), Some(loaded_obj)) =
-                            (base.as_object_mut(), loaded.as_object())
-                        {
-                            for (k, v) in loaded_obj {
-                                base_obj.insert(k.clone(), v.clone());
-                            }
+        if let Ok(contents) = std::fs::read_to_string(&path)
+            && let Ok(loaded) = serde_json::from_str::<serde_json::Value>(&contents)
+        {
+            match &mut result {
+                Some(base) => {
+                    if let (Some(base_obj), Some(loaded_obj)) =
+                        (base.as_object_mut(), loaded.as_object())
+                    {
+                        for (k, v) in loaded_obj {
+                            base_obj.insert(k.clone(), v.clone());
                         }
                     }
-                    None => {
-                        result = Some(loaded);
-                    }
+                }
+                None => {
+                    result = Some(loaded);
                 }
             }
         }

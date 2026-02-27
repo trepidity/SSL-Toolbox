@@ -8,10 +8,10 @@ use crate::CertFormat;
 /// Auto-detect the format of certificate data by inspecting markers and trying parsers.
 pub fn detect_format(data: &[u8]) -> CertFormat {
     // Check for PEM markers
-    if let Ok(text) = std::str::from_utf8(data) {
-        if text.contains("-----BEGIN ") {
-            return CertFormat::Pem;
-        }
+    if let Ok(text) = std::str::from_utf8(data)
+        && text.contains("-----BEGIN ")
+    {
+        return CertFormat::Pem;
     }
 
     // Try PKCS12 (DER-encoded, starts with specific ASN.1 sequence)

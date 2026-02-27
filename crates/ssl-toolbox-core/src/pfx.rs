@@ -52,8 +52,8 @@ pub fn create_pfx(
 
     if all_certs.len() > 1 {
         let mut chain_stack = Stack::new()?;
-        for i in 0..(all_certs.len() - 1) {
-            chain_stack.push(all_certs[i].clone())?;
+        for cert in all_certs.iter().take(all_certs.len() - 1) {
+            chain_stack.push(cert.clone())?;
         }
         builder.ca(chain_stack);
     } else if let Some(chain_path) = chain_file {
@@ -198,8 +198,8 @@ pub fn create_pfx_legacy(
 
     if all_certs.len() > 1 {
         let mut chain_stack = Stack::new()?;
-        for i in 0..(all_certs.len() - 1) {
-            chain_stack.push(all_certs[i].clone())?;
+        for cert in all_certs.iter().take(all_certs.len() - 1) {
+            chain_stack.push(cert.clone())?;
         }
         builder.ca(chain_stack);
     } else if let Some(chain_path) = chain_file {

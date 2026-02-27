@@ -239,7 +239,7 @@ impl CaPlugin for SectigoPlugin {
         }
 
         let response = client
-            .post(&format!("{}/api/ssl/v1/enroll", self.api_base))
+            .post(format!("{}/api/ssl/v1/enroll", self.api_base))
             .header("Content-Type", "application/json")
             .bearer_auth(&token)
             .json(&payload)
@@ -264,29 +264,29 @@ impl CaPlugin for SectigoPlugin {
         println!("Enrollment successful. SSL ID: {}", ssl_id);
 
         // Attach description if provided
-        if let Some(desc) = &options.description {
-            if !desc.is_empty() {
-                println!("Attaching description to certificate...");
-                let update_payload = UpdateSslRequest {
-                    ssl_id,
-                    comments: desc.clone(),
-                };
-                let response = client
-                    .put(&format!("{}/api/ssl/v1", self.api_base))
-                    .header("Content-Type", "application/json")
-                    .bearer_auth(&token)
-                    .json(&update_payload)
-                    .send()
-                    .context("Failed to attach description")?;
+        if let Some(desc) = &options.description
+            && !desc.is_empty()
+        {
+            println!("Attaching description to certificate...");
+            let update_payload = UpdateSslRequest {
+                ssl_id,
+                comments: desc.clone(),
+            };
+            let response = client
+                .put(format!("{}/api/ssl/v1", self.api_base))
+                .header("Content-Type", "application/json")
+                .bearer_auth(&token)
+                .json(&update_payload)
+                .send()
+                .context("Failed to attach description")?;
 
-                if !response.status().is_success() {
-                    println!(
-                        "  Warning: Failed to attach description: {}",
-                        response.status()
-                    );
-                } else {
-                    println!("  Description attached successfully.");
-                }
+            if !response.status().is_success() {
+                println!(
+                    "  Warning: Failed to attach description: {}",
+                    response.status()
+                );
+            } else {
+                println!("  Description attached successfully.");
             }
         }
 
