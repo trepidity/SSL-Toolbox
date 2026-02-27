@@ -68,3 +68,19 @@ pub enum CertFormat {
     Base64,
     Unknown,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CsrDefaults {
+    #[serde(default)]
+    pub country: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub locality: String,
+    #[serde(default)]
+    pub organization: String,
+    #[serde(default)]
+    pub org_unit: String,
+    #[serde(default)]
+    pub email: String,
+}

@@ -3,6 +3,33 @@ use serde::{Deserialize, Serialize};
 use ssl_toolbox_ca::{CaPlugin, CertProfile, CollectFormat, SubmitOptions};
 use std::env;
 
+fn default_api_base() -> String {
+    "https://cert-manager.com".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectigoConfig {
+    #[serde(default = "default_api_base")]
+    pub api_base: String,
+    #[serde(default)]
+    pub org_id: String,
+    #[serde(default)]
+    pub product_code: String,
+    #[serde(default)]
+    pub token_url: String,
+}
+
+impl Default for SectigoConfig {
+    fn default() -> Self {
+        Self {
+            api_base: default_api_base(),
+            org_id: String::new(),
+            product_code: String::new(),
+            token_url: String::new(),
+        }
+    }
+}
+
 pub struct SectigoPlugin {
     api_base: String,
     org_id: String,
@@ -13,14 +40,31 @@ pub struct SectigoPlugin {
 }
 
 impl SectigoPlugin {
-    /// Create and configure a SectigoPlugin from environment variables.
+    /// Create and configure a SectigoPlugin from environment variables only (backward compat).
     pub fn configure(debug: bool) -> Result<Box<dyn CaPlugin>> {
+        Self::configure_with_config(&SectigoConfig::default(), debug)
+    }
+
+    /// Create and configure a SectigoPlugin from a config struct.
+    /// Environment variables override config values where set.
+    pub fn configure_with_config(config: &SectigoConfig, debug: bool) -> Result<Box<dyn CaPlugin>> {
         let scm_client_id = env::var("SCM_CLIENT_ID")
             .context("SCM_CLIENT_ID not set. Check .env file.")?;
         let scm_client_secret = env::var("SCM_CLIENT_SECRET")
             .context("SCM_CLIENT_SECRET not set. Check .env file.")?;
+
         let scm_token_url = env::var("SCM_TOKEN_URL")
-            .context("SCM_TOKEN_URL not set. Check .env file.")?;
+            .unwrap_or_else(|_| config.token_url.clone());
+        if scm_token_url.is_empty() {
+            return Err(anyhow!("SCM_TOKEN_URL not set. Set it in .env or .ssl-toolbox/sectigo.json"));
+        }
+
+        let api_base = env::var("SECTIGO_API_BASE")
+            .unwrap_or_else(|_| config.api_base.clone());
+        let org_id = env::var("SECTIGO_ORG_ID")
+            .unwrap_or_else(|_| config.org_id.clone());
+        let default_product_code = env::var("SECTIGO_PRODUCT_CODE")
+            .unwrap_or_else(|_| config.product_code.clone());
 
         if debug {
             println!("DEBUG: Configuring Sectigo plugin");
@@ -29,11 +73,9 @@ impl SectigoPlugin {
         }
 
         Ok(Box::new(SectigoPlugin {
-            api_base: env::var("SECTIGO_API_BASE")
-                .unwrap_or_else(|_| "https://cert-manager.com".to_string()),
-            org_id: env::var("SECTIGO_ORG_ID").unwrap_or_else(|_| "6377".to_string()),
-            default_product_code: env::var("SECTIGO_PRODUCT_CODE")
-                .unwrap_or_else(|_| "4491".to_string()),
+            api_base,
+            org_id,
+            default_product_code,
             scm_client_id,
             scm_client_secret,
             scm_token_url,

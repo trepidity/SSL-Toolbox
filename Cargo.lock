@@ -1124,6 +1124,8 @@ dependencies = [
  "clap",
  "cliclack",
  "dotenvy",
+ "serde",
+ "serde_json",
  "ssl-toolbox-ca",
  "ssl-toolbox-ca-sectigo",
  "ssl-toolbox-core",

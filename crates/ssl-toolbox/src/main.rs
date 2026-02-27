@@ -1,4 +1,5 @@
 mod display;
+mod settings;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -6,7 +7,7 @@ use cliclack::{confirm, input, intro, outro, password, select};
 use dotenvy::dotenv;
 use std::path::Path;
 
-use ssl_toolbox_core::ConfigInputs;
+use ssl_toolbox_core::{ConfigInputs, CsrDefaults};
 
 #[derive(Parser)]
 #[command(name = "ssl-toolbox", author, version, about = "SSL/TLS Security Toolbox", long_about = None)]
@@ -127,6 +128,12 @@ enum Commands {
         #[arg(long)]
         no_verify: bool,
     },
+    /// Initialize config files in .ssl-toolbox/ directory
+    Init {
+        /// Create config in ~/.ssl-toolbox/ instead of ./.ssl-toolbox/
+        #[arg(long)]
+        global: bool,
+    },
     /// CA operations (requires CA plugin)
     #[command(subcommand)]
     Ca(CaCommands),
@@ -172,7 +179,9 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "sectigo")]
 fn get_ca_plugin(debug: bool) -> Result<Box<dyn ssl_toolbox_ca::CaPlugin>> {
-    ssl_toolbox_ca_sectigo::SectigoPlugin::configure(debug)
+    let sectigo_config: ssl_toolbox_ca_sectigo::SectigoConfig =
+        settings::load_ca_config("sectigo");
+    ssl_toolbox_ca_sectigo::SectigoPlugin::configure_with_config(&sectigo_config, debug)
 }
 
 #[cfg(not(feature = "sectigo"))]
@@ -285,7 +294,8 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             println!("Format: {}", desc);
         }
         Commands::NewConfig { out } => {
-            let inputs = prompt_config_inputs()?;
+            let app_config = settings::load_config();
+            let inputs = prompt_config_inputs(&app_config.csr_defaults)?;
             let output_path = if let Some(o) = out {
                 o
             } else {
@@ -408,6 +418,29 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                 }
             }
         }
+        Commands::Init { global } => {
+            let dir = if global {
+                let home = std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+                home.join(".ssl-toolbox")
+            } else {
+                std::path::PathBuf::from(".ssl-toolbox")
+            };
+
+            let written = settings::init_config(&dir)?;
+            if written.is_empty() {
+                println!("Config files already exist in {}", dir.display());
+            } else {
+                for path in &written {
+                    println!("Created: {}", path.display());
+                }
+                println!(
+                    "\nEdit these files to set your organization defaults, then re-run ssl-toolbox."
+                );
+            }
+        }
         Commands::Ca(ca_cmd) => {
             let plugin = get_ca_plugin(debug)?;
             execute_ca_command(ca_cmd, plugin, debug)?;
@@ -522,6 +555,8 @@ fn execute_ca_command(
 }
 
 fn run_interactive_menu(debug: bool) -> Result<()> {
+    let app_config = settings::load_config();
+
     intro("SSL/TLS Security Toolbox")?;
 
     loop {
@@ -707,7 +742,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 println!("Success: Legacy PFX (TripleDES-SHA1) created at {}", out);
             }
             3 => {
-                let inputs = prompt_config_inputs()?;
+                let inputs = prompt_config_inputs(&app_config.csr_defaults)?;
                 let default_path = format!("{}.cnf", inputs.common_name);
                 let output_path: String = input("Output .cnf file path")
                     .default_input(&default_path)
@@ -1039,26 +1074,56 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
     Ok(())
 }
 
-fn prompt_config_inputs() -> Result<ConfigInputs> {
+fn prompt_config_inputs(defaults: &CsrDefaults) -> Result<ConfigInputs> {
     let common_name: String = input("Common Name").interact()?;
-    let country: String = input("Country (2-letter code)")
-        .default_input("US")
-        .interact()?;
-    let state: String = input("State or Province")
-        .default_input("Texas")
-        .interact()?;
-    let locality: String = input("Locality / City")
-        .default_input("Dallas")
-        .interact()?;
-    let organization: String = input("Organization")
-        .default_input("Baylor Scott & White Health")
-        .interact()?;
-    let org_unit: String = input("Organizational Unit")
-        .default_input("IAM Engineering")
-        .interact()?;
-    let email: String = input("Email Address")
-        .default_input("IAMENGINEERING@BSWHealth.org")
-        .interact()?;
+
+    let country: String = if defaults.country.is_empty() {
+        input("Country (2-letter code)").interact()?
+    } else {
+        input("Country (2-letter code)")
+            .default_input(&defaults.country)
+            .interact()?
+    };
+
+    let state: String = if defaults.state.is_empty() {
+        input("State or Province").interact()?
+    } else {
+        input("State or Province")
+            .default_input(&defaults.state)
+            .interact()?
+    };
+
+    let locality: String = if defaults.locality.is_empty() {
+        input("Locality / City").interact()?
+    } else {
+        input("Locality / City")
+            .default_input(&defaults.locality)
+            .interact()?
+    };
+
+    let organization: String = if defaults.organization.is_empty() {
+        input("Organization").interact()?
+    } else {
+        input("Organization")
+            .default_input(&defaults.organization)
+            .interact()?
+    };
+
+    let org_unit: String = if defaults.org_unit.is_empty() {
+        input("Organizational Unit").interact()?
+    } else {
+        input("Organizational Unit")
+            .default_input(&defaults.org_unit)
+            .interact()?
+    };
+
+    let email: String = if defaults.email.is_empty() {
+        input("Email Address").interact()?
+    } else {
+        input("Email Address")
+            .default_input(&defaults.email)
+            .interact()?
+    };
 
     let mut san_dns: Vec<String> = Vec::new();
     println!("\nAdditional DNS SANs (the CN is already included as DNS.1).");
