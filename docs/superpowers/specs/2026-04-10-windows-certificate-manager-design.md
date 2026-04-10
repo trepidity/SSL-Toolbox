@@ -4,6 +4,14 @@
 **Status:** Approved
 **Approach:** ratatui TUI for cert manager, cliclack retained for existing features
 
+**Implementation Note (2026-04-10):** the current live implementation in this repo
+ships as a Windows CLI plus ratatui browser backed by PowerShell certificate-store
+commands. Private-key inspection, resume/elevation plumbing, and Windows live-store
+CI tests are now implemented. The codebase also has partial backend/UI support for
+physical-store browsing and qualified service/user store contexts, but those flows
+still depend on the PowerShell/provider-path model and still need Windows-host
+validation. The lower-level Win32 exact-handle model in this spec remains future work.
+
 ---
 
 ## Table of Contents
@@ -39,6 +47,11 @@
 Add a Windows Certificate Manager feature to SSL-Toolbox that provides full interactive access to the Windows certificate stores. The feature launches as a ratatui-based TUI from the existing cliclack main menu, offering tree-style navigation through store locations, store names, physical stores, and individual certificates. Supports viewing public/private keys, importing and exporting in all standard formats, and authentication/elevation for privileged operations.
 
 The feature also exposes direct CLI subcommands for non-interactive use (scripting, automation).
+
+This is a future-state implementation spec. It intentionally describes planned
+crates, modules, and command wiring that do not yet exist in the current repo.
+Code snippets in this document show the intended API and control flow; they are
+design-level examples and may need final Rust translation during implementation.
 
 ---
 
@@ -151,6 +164,30 @@ pub struct PhysicalStoreInfo {
     /// Flags describing store characteristics.
     pub flags: u32,
 }
+
+/// Precise store path for a selected certificate.
+/// Used so item-level operations can act on the exact certificate instance
+/// the user selected, including physical-store context when applicable.
+#[derive(Debug, Clone)]
+pub struct StorePath {
+    pub location: StoreLocationContext,
+    pub store_name: String,
+    pub physical_store: Option<String>,
+}
+
+/// Opaque handle for an exact certificate context from the Windows store.
+/// Internally owns a duplicated PCCERT_CONTEXT and must free it on drop.
+///
+/// This avoids lossy "re-find by thumbprint" behavior, which is unsafe when a
+/// logical store contains duplicate certificates from multiple physical stores.
+/// `Clone` must duplicate the underlying context with `CertDuplicateCertificateContext`,
+/// not merely copy the raw pointer.
+/// `Drop` must release it with `CertFreeCertificateContext`.
+#[derive(Debug, Clone)]
+pub struct CertHandle {
+    pub source: StorePath,
+    raw: isize, // PCCERT_CONTEXT
+}
 ```
 
 ### 3.2 Certificate types (`types.rs`)
@@ -160,6 +197,8 @@ pub struct PhysicalStoreInfo {
 /// Contains pre-parsed fields for fast rendering without re-parsing DER on every frame.
 #[derive(Debug, Clone)]
 pub struct CertEntry {
+    /// Opaque handle for the exact certificate instance in the Windows store.
+    pub handle: CertHandle,
     /// Full DER-encoded certificate bytes (kept for export/detail operations).
     pub der: Vec<u8>,
     /// Parsed subject distinguished name components.
@@ -190,7 +229,8 @@ pub struct CertEntry {
     pub extended_key_usage: Option<Vec<ExtKeyUsage>>,
     /// Public key information.
     pub public_key: PublicKeyInfo,
-    /// Private key information (detected from store context, not from DER).
+    /// Private key presence detected from store properties.
+    /// Provider metadata is loaded lazily when entering the detail view.
     pub private_key: PrivateKeyStatus,
     /// Signature algorithm name and OID.
     pub signature_algorithm: String,
@@ -280,13 +320,15 @@ pub enum PublicKeyParams {
 pub enum PrivateKeyStatus {
     /// No private key associated with this certificate.
     Absent,
-    /// Private key exists.
-    Present(PrivateKeyInfo),
-    /// Private key exists but we couldn't read its properties (permission denied, etc.).
-    AccessDenied(String),
+    /// Certificate has an associated private key.
+    Present,
+    /// Store properties suggest a key association exists, but deeper inspection
+    /// requires explicit access and was not attempted during list enumeration.
+    Inaccessible(String),
 }
 
 /// Private key metadata from the Windows key storage provider.
+/// Loaded lazily for the selected certificate, not for the entire store view.
 #[derive(Debug, Clone)]
 pub struct PrivateKeyInfo {
     /// Key storage provider type.
@@ -370,6 +412,16 @@ pub struct ImportPreview {
     pub target_store: String,
 }
 
+/// Options controlling how a file is imported into the target store.
+#[derive(Debug, Clone)]
+pub struct ImportOptions {
+    /// PFX/PKCS12 password, if required.
+    pub password: Option<String>,
+    /// Whether imported private keys should be marked exportable.
+    /// Applies only to PFX/PKCS12 imports that contain private keys.
+    pub private_key_exportable: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImportCertPreview {
     pub subject_cn: String,
@@ -439,7 +491,12 @@ pub struct ImpersonationContext {
 pub struct RelaunchArgs {
     pub location: String,
     pub store: Option<String>,
+    pub viewing_physical: bool,
     pub physical: Option<String>,
+    pub thumbprint: Option<String>,
+    /// Optional post-resume intent (e.g., "import", "delete", "export").
+    /// Only non-sensitive navigation/action state is preserved.
+    pub pending_action: Option<String>,
 }
 ```
 
@@ -576,7 +633,8 @@ pub fn list_physical_stores(
 ) -> WinCertResult<Vec<PhysicalStoreInfo>>;
 
 /// Open a logical certificate store and enumerate all certificates.
-/// Returns CertEntry structs with pre-parsed fields for display.
+/// Returns CertEntry structs with pre-parsed fields for display plus an
+/// exact certificate handle for later item-level operations.
 /// This is the main data-loading call for the store view.
 pub fn open_and_enumerate(
     location: &StoreLocationContext,
@@ -590,6 +648,9 @@ pub fn open_physical_and_enumerate(
     physical_name: &str,
 ) -> WinCertResult<Vec<CertEntry>>;
 
+/// Delete the exact selected certificate from the store.
+pub fn delete_certificate(cert: &CertHandle) -> WinCertResult<()>;
+
 /// Look up the display name and description for a well-known store name.
 /// Returns ("Unknown Store", "") for unrecognized names.
 pub fn store_display_info(store_name: &str) -> (&'static str, &'static str);
@@ -601,11 +662,11 @@ pub fn store_display_info(store_name: &str) -> (&'static str, &'static str);
 use crate::types::*;
 use crate::error::WinCertResult;
 
-/// Parse a DER-encoded certificate into a CertEntry.
+/// Parse a DER-encoded certificate plus its exact store handle into a CertEntry.
 /// Uses x509-parser for field extraction.
-/// The private_key field is set to Absent -- callers must populate it separately
-/// from the Windows store context.
-pub fn parse_cert_der(der: &[u8]) -> WinCertResult<CertEntry>;
+/// The private_key field is set to Absent -- callers populate lightweight
+/// presence information from Windows store properties after parsing.
+pub fn parse_cert_der(handle: CertHandle, der: &[u8]) -> WinCertResult<CertEntry>;
 
 /// Compute SHA-1 thumbprint of DER-encoded certificate bytes.
 /// Returns uppercase colon-separated hex (e.g., "A1:B2:C3:D4:...").
@@ -638,9 +699,15 @@ use crate::types::*;
 use crate::error::WinCertResult;
 
 /// Detect private key association for a certificate in the Windows store.
-/// Uses schannel's CertContext::private_key().acquire() to probe.
-/// Does NOT extract key material -- only detects presence and reads metadata.
-pub fn detect_private_key(cert_context: &schannel::cert_context::CertContext) -> PrivateKeyStatus;
+/// Uses certificate properties (CERT_KEY_PROV_INFO_PROP_ID,
+/// CERT_KEY_CONTEXT_PROP_ID, CERT_NCRYPT_KEY_HANDLE_PROP_ID) so enumeration
+/// does not need to acquire provider handles or trigger smart-card/HSM access.
+pub fn detect_private_key(cert: &CertHandle) -> PrivateKeyStatus;
+
+/// Load provider/container/exportability metadata for the selected certificate.
+/// This may require opening the provider and should happen lazily from the
+/// certificate detail view, not during whole-store enumeration.
+pub fn load_private_key_info(cert: &CertHandle) -> WinCertResult<PrivateKeyInfo>;
 
 /// Inspect the full private key parameters for an exportable key.
 /// Requires the key to be marked exportable. Returns Unavailable if not.
@@ -650,7 +717,7 @@ pub fn detect_private_key(cert_context: &schannel::cert_context::CertContext) ->
 ///
 /// This is a privileged operation -- the caller should confirm with the user first.
 pub fn inspect_private_key(
-    cert_context: &schannel::cert_context::CertContext,
+    cert: &CertHandle,
 ) -> WinCertResult<PrivateKeyParams>;
 ```
 
@@ -671,8 +738,8 @@ pub fn preview_import(
 
 /// Execute the import into the specified store.
 ///
-/// PFX/PKCS12: Calls schannel::CertStore::import_pkcs12(), then copies certs
-///   to the target store via CertAddCertificateContextToStore.
+/// PFX/PKCS12: Calls PFXImportCertStore with flags derived from ImportOptions,
+///   then copies certs to the target store via CertAddCertificateContextToStore.
 /// PEM: Parses all certs from the PEM file, converts each to DER,
 ///   creates a CertContext, and adds to store.
 /// DER: Creates CertContext directly from bytes, adds to store.
@@ -685,12 +752,12 @@ pub fn execute_import(
     format: CertFileFormat,
     target_location: &StoreLocationContext,
     target_store: &str,
-    password: Option<&str>,
+    options: &ImportOptions,
 ) -> WinCertResult<ImportResult>;
 
 /// Detect the format of a certificate file.
 /// Extends ssl-toolbox-core's detect_format with PKCS7 support.
-pub fn detect_import_format(data: &[u8]) -> CertFileFormat;
+pub fn detect_import_format(data: &[u8]) -> Option<CertFileFormat>;
 ```
 
 ### 4.5 `export.rs` -- Export Operations
@@ -708,7 +775,7 @@ use crate::error::WinCertResult;
 /// PKCS7: Build PKCS7 structure containing the cert (and optionally chain).
 /// Base64: ctx.to_der() then base64-encode without PEM headers.
 pub fn export_certificate(
-    cert_context: &schannel::cert_context::CertContext,
+    cert: &CertHandle,
     options: &ExportOptions,
 ) -> WinCertResult<ExportResult>;
 
@@ -726,7 +793,7 @@ pub fn export_all_certificates(
 /// Uses Windows CertGetCertificateChain API to find intermediates and root.
 /// Returns the chain certs in order (leaf first, root last).
 pub fn build_chain(
-    cert_context: &schannel::cert_context::CertContext,
+    cert: &CertHandle,
 ) -> WinCertResult<Vec<Vec<u8>>>;
 ```
 
@@ -737,7 +804,7 @@ use crate::types::*;
 use crate::error::WinCertResult;
 
 /// Check whether the current process is running elevated (admin).
-/// Calls windows_sys::Win32::Security::IsUserAnAdmin().
+/// Calls windows_sys::Win32::UI::Shell::IsUserAnAdmin().
 pub fn check_elevation() -> ElevationStatus;
 
 /// Check whether a specific operation will require elevation.
@@ -812,7 +879,8 @@ let store = CertStore::open_current_user("MY")?;    // CurrentUser
 let store = CertStore::open_local_machine("Root")?;  // LocalMachine
 ```
 
-**Service/User/Physical stores** -- Use `windows-sys` directly:
+**Service/User/Physical stores** -- Use `windows-sys` directly, then duplicate
+each enumerated `PCCERT_CONTEXT` into an owned `CertHandle` before the store is closed:
 
 ```rust
 // Service store: "ServiceName\MY"
@@ -855,17 +923,18 @@ for cert_ctx in store.certs() {
 }
 ```
 
-### 5.4 Private key detection (via `schannel`)
+### 5.4 Private key detection (via `windows-sys`)
 
 ```rust
-use schannel::cert_context::AcquirePrivateKeyOptions;
+// Presence check during enumeration:
+let has_key = has_cert_property(ctx, CERT_KEY_PROV_INFO_PROP_ID)
+    || has_cert_property(ctx, CERT_KEY_CONTEXT_PROP_ID)
+    || has_cert_property(ctx, CERT_NCRYPT_KEY_HANDLE_PROP_ID);
 
-match cert_ctx.private_key().silent().acquire() {
-    Ok(private_key) => match private_key {
-        PrivateKey::CryptProv(cp) => { /* CryptoAPI key */ }
-        PrivateKey::NcryptKey(nk) => { /* CNG key */ }
-    },
-    Err(_) => { /* No private key or access denied */ }
+// Deeper metadata load only in detail view:
+match open_private_key_provider_for_selected_cert(&cert_handle) {
+    Ok(provider) => { /* populate PrivateKeyInfo */ }
+    Err(err) => { /* show info unavailable / access denied in detail view */ }
 }
 ```
 
@@ -900,15 +969,19 @@ use windows_sys::Win32::Security::Cryptography::{
 
 ### 5.6 Import operations
 
-**PFX import** (via `schannel`):
+**PFX import** (via `windows-sys`):
 
 ```rust
-let pfx_data = std::fs::read(path)?;
-let temp_store = CertStore::import_pkcs12(&pfx_data, Some(password))?;
-let target_store = CertStore::open_current_user("MY")?;
-for cert in temp_store.certs() {
-    target_store.add_cert(&cert, CertAdd::ReplaceExisting)?;
+let mut flags = PKCS12_INCLUDE_EXTENDED_PROPERTIES;
+flags |= match target_location.location {
+    StoreLocation::LocalMachine => CRYPT_MACHINE_KEYSET,
+    _ => CRYPT_USER_KEYSET,
+};
+if options.private_key_exportable {
+    flags |= CRYPT_EXPORTABLE;
 }
+let temp_store = PFXImportCertStore(&blob, password_wide.as_ptr(), flags)?;
+// Copy imported contexts to the target store
 ```
 
 **DER/PEM import** (via `windows-sys`):
@@ -958,9 +1031,9 @@ let pkcs7_store = unsafe {
 **PFX export** (via `schannel`):
 
 ```rust
-// Build a temp store with the cert + chain
+// Build a temp store with the exact selected cert + chain
 let temp_store = CertStore::new()?; // memory store
-temp_store.add_cert(&cert_ctx, CertAdd::Always)?;
+temp_store.add_cert(selected_cert_context, CertAdd::Always)?;
 // Add chain certs if requested
 let pfx_bytes = temp_store.export_pkcs12(password)?;
 std::fs::write(path, pfx_bytes)?;
@@ -1206,6 +1279,7 @@ Main Menu (cliclack)
         |
         +-- CertDetailScreen
         |     +-- Scrollable detail view
+        |     +-- Lazy load private key metadata for selected cert
         |     +-- Actions: [e]xport  [d]elete  [k] inspect key
         |
         +-- KeyInspectScreen (overlay on CertDetailScreen)
@@ -1366,7 +1440,7 @@ impl AppState {
         }
         // Private key filter
         if let Some(has_key) = self.filter.has_private_key {
-            let cert_has_key = matches!(cert.private_key, PrivateKeyStatus::Present(_));
+            let cert_has_key = matches!(cert.private_key, PrivateKeyStatus::Present);
             if cert_has_key != has_key { return false; }
         }
         true
@@ -1470,7 +1544,18 @@ Toggle between truncated and full-length display for long values:
 
 ### 9.4 Private key inspection (`k` key)
 
-Opens a modal overlay:
+When entering `CertDetailScreen`, the app attempts a lazy `load_private_key_info()`
+for the selected certificate handle. If that succeeds, provider/container/exportability
+metadata is shown in the detail panel. If it fails, the detail panel shows:
+
+```text
+Present    : Yes
+Details    : Unavailable until explicit access succeeds
+Reason     : Smart card, HSM, or permissions may block provider inspection
+```
+
+Pressing `k` then performs the explicit, privileged `inspect_private_key()` call
+against the selected certificate handle and opens a modal overlay:
 
 ```
 ╭─ Private Key Inspection ──────────────────────────────────╮
@@ -1530,8 +1615,8 @@ If key is not exportable:
          v
   detect_import_format(data)
          |
-         +─ PFX ──> PasswordDialog ──> preview_import()
-         |                                    |
+         +─ PFX ──> PasswordDialog ──> ConfirmDialog(exportable?) ──> preview_import()
+         |                                                             |
          +─ PEM ──────────────────> preview_import()
          |                                    |
          +─ DER ──────────────────> preview_import()
@@ -1540,7 +1625,7 @@ If key is not exportable:
          |                                    |
          +─ Base64 ───────────────> preview_import()
          |                                    |
-         +─ Unknown ──> ErrorDialog("Unrecognized format")
+         +─ None ─────> ErrorDialog("Unrecognized format")
          |
          v
   ImportPreviewDialog
@@ -1562,28 +1647,43 @@ The `FileInputDialog` provides:
 
 ### 10.3 Format detection extension
 
-The import format detector extends `ssl-toolbox-core::convert::detect_format()` with PKCS7:
+The import format detector extends `ssl-toolbox-core::convert::detect_format()` with
+explicit PEM PKCS7 recognition and returns `None` when the input is unsupported:
 
 ```rust
-pub fn detect_import_format(data: &[u8]) -> CertFileFormat {
-    // 1. Check PEM markers
-    if is_pem(data) { return CertFileFormat::Pem; }
+pub fn detect_import_format(data: &[u8]) -> Option<CertFileFormat> {
+    // 1. PEM-encoded PKCS7/P7B
+    if is_pkcs7_pem(data) { return Some(CertFileFormat::Pkcs7); }
 
-    // 2. Try PKCS7 (ASN.1 OID 1.2.840.113549.1.7.2 = signedData)
+    // 2. Regular PEM certificate / PEM bundle
+    if is_pem_cert_bundle(data) { return Some(CertFileFormat::Pem); }
+
+    // 3. Try PKCS7 DER (ASN.1 OID 1.2.840.113549.1.7.2 = signedData)
     //    The DER encoding starts with SEQUENCE { OID, ... }
-    if is_pkcs7_der(data) { return CertFileFormat::Pkcs7; }
+    if is_pkcs7_der(data) { return Some(CertFileFormat::Pkcs7); }
 
-    // 3. Try PKCS12 (uses schannel or openssl)
-    if is_pkcs12(data) { return CertFileFormat::Pfx; }
+    // 4. Try PKCS12 (uses schannel or openssl)
+    if is_pkcs12(data) { return Some(CertFileFormat::Pfx); }
 
-    // 4. Try DER certificate
-    if is_der_cert(data) { return CertFileFormat::Der; }
+    // 5. Try DER certificate
+    if is_der_cert(data) { return Some(CertFileFormat::Der); }
 
-    // 5. Try base64 (no headers)
-    if is_base64(data) { return CertFileFormat::Base64; }
+    // 6. Try base64 (no headers)
+    if is_base64(data) { return Some(CertFileFormat::Base64); }
 
-    // Note: PKCS7 check must come BEFORE PKCS12 because both are ASN.1
-    // but PKCS7 has a more specific OID we can check first.
+    None
+}
+
+fn is_pkcs7_pem(data: &[u8]) -> bool {
+    std::str::from_utf8(data)
+        .map(|text| text.contains("-----BEGIN PKCS7-----"))
+        .unwrap_or(false)
+}
+
+fn is_pem_cert_bundle(data: &[u8]) -> bool {
+    std::str::from_utf8(data)
+        .map(|text| text.contains("-----BEGIN CERTIFICATE-----"))
+        .unwrap_or(false)
 }
 
 fn is_pkcs7_der(data: &[u8]) -> bool {
@@ -1593,6 +1693,24 @@ fn is_pkcs7_der(data: &[u8]) -> bool {
     data.len() > 30 && data[..30].windows(oid_bytes.len()).any(|w| w == oid_bytes)
 }
 ```
+
+### 10.3.1 PFX import policy
+
+If the selected file is PFX/PKCS12 and contains a private key, the flow must ask:
+
+```text
+Import private key as exportable?
+> No (recommended)
+  Yes
+```
+
+This maps directly to the `CRYPT_EXPORTABLE` flag at import time. The choice is
+explicit because Windows does not allow changing exportability after import.
+
+Key persistence flags must also be explicit:
+- `CurrentUser` and impersonated user imports use `CRYPT_USER_KEYSET`
+- `LocalMachine` and service-store imports use `CRYPT_MACHINE_KEYSET`
+- Machine-key imports must rely on Windows ACL behavior for the target key container
 
 ### 10.4 Import preview dialog
 
@@ -1726,7 +1844,7 @@ fn default_export_filename(cert: &CertEntry, format: CertFileFormat) -> String {
 
          |
          v (user types matching thumbprint)
-  cert_context.delete() via schannel
+  delete_certificate(&selected_cert.handle)
          |
          v
   Success dialog ──> pop back to StoreViewScreen ──> refresh certs
@@ -1782,14 +1900,23 @@ if auth::requires_elevation(&state.current_location, true)
 On confirm:
 1. Build `RelaunchArgs` from current `AppState` navigation
 2. Call `auth::relaunch_elevated(args)`
-3. ShellExecuteW spawns new elevated process with `--certmgr --location <loc> --store <name>`
+3. ShellExecuteW spawns new elevated process with hidden `--certmgr-*` resume args
 4. Current process exits
 
 On the new process:
 1. `main.rs` detects `--certmgr` flag
 2. Calls `launch_certmgr(Some(resume_args))` instead of the interactive menu
-3. `launch_certmgr` pushes screens matching the resume args onto the nav stack
-4. User lands right where they were, now elevated
+3. `launch_certmgr` pushes screens matching the safe resume args onto the nav stack
+4. User lands at the same navigation target (location/store/physical view and selected cert when available), now elevated
+
+Sensitive transient state is not resumed:
+- Password fields
+- Arbitrary file paths typed into dialogs
+- Partially completed confirmation prompts
+
+If the resumed location/store/path contains multiple matching certificates for the
+saved selection hint, the tool resumes at the containing store view and shows a
+status message instead of guessing which duplicate item to open.
 
 ### 13.4 User impersonation flow
 
@@ -1942,7 +2069,7 @@ members = [
 ### 14.5 Conditional compilation in binary crate
 
 ```rust
-// src/main.rs
+// crates/ssl-toolbox/src/main.rs
 
 #[cfg(target_os = "windows")]
 mod win_certmgr;
@@ -1968,6 +2095,21 @@ struct Cli {
     #[arg(long, hide = true)]
     certmgr_store: Option<String>,
 
+    /// Resume physical/logical mode after UAC elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true, default_value_t = false)]
+    certmgr_physical_view: bool,
+
+    /// Resume physical store after UAC elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr_physical: Option<String>,
+
+    /// Resume selected certificate after UAC elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr_thumbprint: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -1978,6 +2120,9 @@ if cli.certmgr {
     let resume = win_certmgr::ResumeArgs {
         location: cli.certmgr_location,
         store: cli.certmgr_store,
+        viewing_physical: cli.certmgr_physical_view,
+        physical: cli.certmgr_physical,
+        thumbprint: cli.certmgr_thumbprint,
     };
     return win_certmgr::launch_certmgr(Some(resume));
 }
@@ -2031,6 +2176,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
 pub struct ResumeArgs {
     pub location: Option<String>,
     pub store: Option<String>,
+    pub viewing_physical: bool,
+    pub physical: Option<String>,
+    pub thumbprint: Option<String>,
 }
 
 pub fn launch_certmgr(resume: Option<ResumeArgs>) -> anyhow::Result<()> {
@@ -2089,6 +2237,17 @@ pub fn launch_certmgr(resume: Option<ResumeArgs>) -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+### 15.1.1 Terminal cleanup guarantees
+
+The ratatui/cliclack handoff must restore the terminal on every exit path:
+- Normal quit back to the cliclack menu
+- UAC relaunch before process exit
+- Early return from initialization or event-loop errors
+- Panic during rendering or input handling
+
+Implementation should use a small RAII guard (and, if needed, a panic hook) so
+`ratatui::restore()` is not dependent on a single success-path return.
 
 ### 15.2 Screen trait
 
@@ -2290,6 +2449,9 @@ enum CertStoreCommands {
         /// Password (for PFX files)
         #[arg(short, long)]
         password: Option<String>,
+        /// Mark imported private keys as exportable (PFX only)
+        #[arg(long)]
+        exportable: bool,
     },
     /// Export a certificate from a store
     Export {
@@ -2342,7 +2504,7 @@ enum CertStoreCommands {
 
 | ssl-toolbox-core module | Reuse in win-certstore | How |
 |------------------------|----------------------|-----|
-| `convert::detect_format()` | Extended for PKCS7 | Call existing function, add PKCS7 check before it |
+| `convert::detect_format()` | Extended for PKCS7 | Call existing function, add PEM/DER PKCS7 recognition before generic PEM/PKCS12 checks |
 | `CertFormat` enum | Extended | Add `Pkcs7` variant to the existing enum in cert_types.rs |
 | `CertDetails` struct | Display integration | Convert `CertEntry` to `CertDetails` for compatibility with existing display functions |
 | `pfx::extract_pfx_details()` | Import preview | Use for PFX preview before import |
@@ -2368,6 +2530,11 @@ pub enum CertFormat {
 
 ```rust
 pub fn detect_format(data: &[u8]) -> CertFormat {
+    // NEW: Check for PEM-encoded PKCS7 before generic PEM.
+    if is_pkcs7_pem(data) {
+        return CertFormat::Pkcs7;
+    }
+
     // Check for PEM markers
     if let Ok(text) = std::str::from_utf8(data)
         && text.contains("-----BEGIN ")
@@ -2375,8 +2542,8 @@ pub fn detect_format(data: &[u8]) -> CertFormat {
         return CertFormat::Pem;
     }
 
-    // NEW: Check for PKCS7 before PKCS12 (both are ASN.1, but PKCS7 has specific OID)
-    if is_pkcs7(data) {
+    // NEW: Check for DER PKCS7 before PKCS12 (both are ASN.1, but PKCS7 has specific OID)
+    if is_pkcs7_der(data) {
         return CertFormat::Pkcs7;
     }
 
@@ -2388,7 +2555,13 @@ pub fn detect_format(data: &[u8]) -> CertFormat {
     // ... rest unchanged ...
 }
 
-fn is_pkcs7(data: &[u8]) -> bool {
+fn is_pkcs7_pem(data: &[u8]) -> bool {
+    std::str::from_utf8(data)
+        .map(|text| text.contains("-----BEGIN PKCS7-----"))
+        .unwrap_or(false)
+}
+
+fn is_pkcs7_der(data: &[u8]) -> bool {
     // PKCS7 signedData OID: 1.2.840.113549.1.7.2
     // DER-encoded: 06 09 2A 86 48 86 F7 0D 01 07 02
     let oid = &[0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
@@ -2437,11 +2610,14 @@ Certificates are loaded only when a store is opened (on `StoreViewScreen::on_ent
 
 When enumerating a store:
 1. Call `store.certs()` to get all `CertContext` handles
-2. For each cert: extract DER bytes, parse with `x509-parser`, detect private key
-3. Build `CertEntry` structs with all pre-parsed fields
-4. This happens once per store open. The `certs: Vec<CertEntry>` is then used for all rendering.
+2. For each cert: duplicate the `PCCERT_CONTEXT` into a `CertHandle`
+3. Extract DER bytes, parse with `x509-parser`, detect private-key presence from certificate properties
+4. Build `CertEntry` structs with all pre-parsed fields
+5. This happens once per store open. The `certs: Vec<CertEntry>` is then used for all rendering.
 
-Estimated cost for a store with 300 certificates: ~50-100ms total parse time (x509-parser is fast, private key detection is one Win32 call per cert).
+Estimated cost for a store with 300 certificates: ~50-150ms total parse time.
+The design avoids opening key providers during list enumeration, so smart-card and
+HSM-backed certificates do not stall the main table load.
 
 ### 19.3 Refresh behavior
 
@@ -2469,11 +2645,16 @@ Press [i] to import, or [Esc] to go back.
 
 ### 20.2 Smart card certificates
 
-Smart card certs appear in the store enumeration like any other cert. Private key detection via `cert_ctx.private_key().acquire()` may fail or prompt for a PIN (suppressed by `.silent()`). If the key probe fails, `PrivateKeyStatus::AccessDenied` is set with a message indicating a smart card may be required.
+Smart card certs appear in the store enumeration like any other cert. Presence
+detection uses certificate properties only, so list rendering does not prompt for
+a PIN. Lazy metadata load or explicit `k` inspection may fail or require user
+interaction; in that case the UI shows the key as present but its details as unavailable.
 
 ### 20.3 Hardware Security Module (HSM) keys
 
-Similar to smart cards: the certificate is in the store but the private key is in the HSM. Key detection returns `Present` with the HSM provider name. Key inspection returns `Unavailable` since HSM keys are never exportable.
+Similar to smart cards: the certificate is in the store but the private key is in
+the HSM. Key detection returns `Present`; lazy metadata load may reveal the HSM
+provider name, and key inspection returns `Unavailable` since HSM keys are never exportable.
 
 ### 20.4 Corrupted or unparseable certificates
 
@@ -2522,10 +2703,11 @@ Resume normal rendering when the terminal is resized above the minimum.
 
 The following can be tested on any platform (no Windows APIs needed):
 
-- `cert.rs`: `parse_cert_der()`, `thumbprint_sha1()`, `thumbprint_sha256()`, `compute_status()`, `parse_distinguished_name()` -- feed known DER bytes, verify parsed fields.
+- `cert.rs`: `thumbprint_sha1()`, `thumbprint_sha256()`, `compute_status()`, `parse_distinguished_name()`, `extract_public_key_info()` -- feed known DER bytes, verify parsed fields.
 - `types.rs`: `CertStatus` computation, `San` display formatting, `DistinguishedName` formatting.
 - `error.rs`: Error display formatting.
-- Format detection: `detect_import_format()` with sample files of each format.
+- Format detection: `detect_import_format()` with sample files of each format,
+  including PEM-encoded PKCS7 and unsupported inputs returning `None`.
 - Filter logic: `AppState::matches_filter()`, `AppState::compare_certs()`.
 
 ### 21.2 Integration tests (Windows-only)
@@ -2535,7 +2717,8 @@ Gated behind `#[cfg(test)]` + `#[cfg(target_os = "windows")]`:
 - **Store enumeration**: Open `CurrentUser\MY` and `CurrentUser\Root`, verify certs are returned.
 - **Physical store listing**: List physical stores for `CurrentUser\Root`, verify `.Default` exists.
 - **Import/export round-trip**: Import a test PFX into a temporary store name, export it back, verify the cert matches.
-- **Private key detection**: Import a PFX with a private key, verify `PrivateKeyStatus::Present` is returned.
+- **Private key detection**: Import a PFX with a private key, verify `PrivateKeyStatus::Present` is returned without forcing provider acquisition during list enumeration.
+- **Resume behavior**: Verify hidden `--certmgr-*` args restore logical view, physical view, and selected certificate when available.
 - **Elevation check**: Verify `check_elevation()` returns a valid `ElevationStatus`.
 
 ### 21.3 Test certificates
@@ -2655,6 +2838,6 @@ Manual testing protocol:
 | Crate isolation | Separate ssl-toolbox-win-certstore | Keeps Windows-specific unsafe code and large dependency tree (windows-sys) isolated from ssl-toolbox-core. Clean compilation boundary. The library crate can be tested independently. |
 | Format detection | Extend ssl-toolbox-core | Add Pkcs7 variant to existing CertFormat enum and PKCS7 detection to existing detect_format(). Keeps format logic centralized. |
 | Error handling | Custom WinCertError enum | Wraps Win32 error codes with function context and actionable messages. Converts cleanly to anyhow::Error at the TUI boundary. |
-| Private key approach | Detect by default, inspect on request | Detection (presence, provider, exportable flag) is cheap and safe. Parameter extraction requires exportable keys and is a privileged operation -- gated behind explicit user action with confirmation prompt. |
+| Private key approach | Detect presence by default, load metadata and inspect on request | Store enumeration uses certificate properties only. Provider metadata loads lazily in detail view. Parameter extraction requires exportable keys and is a privileged operation gated behind explicit user action. |
 | Physical stores | windows-sys CertEnumPhysicalStore | schannel doesn't expose physical store enumeration. Drop down to Win32 callback API for this specific feature. Wrap the unsafe callback in a safe Rust iterator. |
-| Navigation state resume | CLI args | When re-launching elevated via ShellExecuteW, encode the current location and store as `--certmgr --certmgr-location X --certmgr-store Y` args. The new process parses these and pushes matching screens onto the nav stack. Simple, stateless, no temp files. |
+| Navigation state resume | CLI args | When re-launching elevated via ShellExecuteW, encode safe navigation state as hidden `--certmgr-*` args, including physical-view state and selected thumbprint when available. Sensitive dialog input is intentionally not resumed. |

@@ -1,0 +1,11 @@
+[package]
+name = "ssl-toolbox-win-certstore"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+openssl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ssl-toolbox-core = { workspace = true }

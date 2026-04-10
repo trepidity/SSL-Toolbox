@@ -1,5 +1,7 @@
 mod display;
 mod settings;
+#[cfg(target_os = "windows")]
+mod win_certmgr;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -15,6 +17,31 @@ struct Cli {
     /// Enable debug output
     #[arg(long, global = true)]
     debug: bool,
+
+    /// Launch directly into the Windows Certificate Manager
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr: bool,
+
+    /// Resume location after elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr_location: Option<String>,
+
+    /// Resume store after elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr_store: Option<String>,
+
+    /// Resume selected certificate after elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr_thumbprint: Option<String>,
+
+    /// Resume selected physical store after elevation
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true)]
+    certmgr_physical: Option<String>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -137,6 +164,10 @@ enum Commands {
     /// CA operations (requires CA plugin)
     #[command(subcommand)]
     Ca(CaCommands),
+    /// Windows certificate store operations
+    #[cfg(target_os = "windows")]
+    #[command(subcommand)]
+    CertStore(CertStoreCommands),
 }
 
 #[derive(Subcommand)]
@@ -166,10 +197,87 @@ enum CaCommands {
     },
 }
 
+#[cfg(target_os = "windows")]
+#[derive(Subcommand)]
+enum CertStoreCommands {
+    /// List store names at a location
+    Stores {
+        #[arg(short, long, default_value = "current-user")]
+        location: String,
+    },
+    /// List certificates in a store
+    List {
+        #[arg(short, long, default_value = "current-user")]
+        location: String,
+        #[arg(short, long, default_value = "MY")]
+        store: String,
+    },
+    /// Show a certificate by thumbprint
+    Show {
+        #[arg(short, long, default_value = "current-user")]
+        location: String,
+        #[arg(short, long, default_value = "MY")]
+        store: String,
+        #[arg(short, long)]
+        thumbprint: String,
+    },
+    /// Import a certificate or PFX into a store
+    Import {
+        #[arg(short, long, default_value = "current-user")]
+        location: String,
+        #[arg(short, long, default_value = "MY")]
+        store: String,
+        #[arg(short, long)]
+        file: String,
+        #[arg(short, long)]
+        password: Option<String>,
+        #[arg(long)]
+        exportable: bool,
+    },
+    /// Export a certificate from a store
+    Export {
+        #[arg(short, long, default_value = "current-user")]
+        location: String,
+        #[arg(short, long, default_value = "MY")]
+        store: String,
+        #[arg(short, long)]
+        thumbprint: String,
+        #[arg(short, long)]
+        out: String,
+        #[arg(short, long, default_value = "pem")]
+        format: String,
+        #[arg(long)]
+        pfx_password: Option<String>,
+    },
+    /// Delete a certificate from a store
+    Delete {
+        #[arg(short, long, default_value = "current-user")]
+        location: String,
+        #[arg(short, long, default_value = "MY")]
+        store: String,
+        #[arg(short, long)]
+        thumbprint: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Launch the interactive Windows certificate browser
+    Browse,
+}
+
 fn main() -> Result<()> {
     let _ = dotenv();
 
     let cli = Cli::parse();
+
+    #[cfg(target_os = "windows")]
+    if cli.certmgr {
+        return win_certmgr::launch_certmgr(Some(win_certmgr::ResumeArgs {
+            location: cli.certmgr_location,
+            store: cli.certmgr_store,
+            thumbprint: cli.certmgr_thumbprint,
+            physical: cli.certmgr_physical,
+        }));
+    }
 
     match cli.command {
         Some(cmd) => execute_command(cmd, cli.debug),
@@ -440,6 +548,59 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             let plugin = get_ca_plugin(debug)?;
             execute_ca_command(ca_cmd, plugin, debug)?;
         }
+        #[cfg(target_os = "windows")]
+        Commands::CertStore(cmd) => match cmd {
+            CertStoreCommands::Stores { location } => {
+                win_certmgr::list_store_names(&location)?;
+            }
+            CertStoreCommands::List { location, store } => {
+                win_certmgr::list_store_certs(&location, &store)?;
+            }
+            CertStoreCommands::Show {
+                location,
+                store,
+                thumbprint,
+            } => {
+                win_certmgr::show_certificate_details(&location, &store, &thumbprint)?;
+            }
+            CertStoreCommands::Import {
+                location,
+                store,
+                file,
+                password,
+                exportable,
+            } => {
+                win_certmgr::import_into_store(&location, &store, &file, password, exportable)?;
+            }
+            CertStoreCommands::Export {
+                location,
+                store,
+                thumbprint,
+                out,
+                format,
+                pfx_password,
+            } => {
+                win_certmgr::export_from_store(
+                    &location,
+                    &store,
+                    &thumbprint,
+                    &out,
+                    &format,
+                    pfx_password,
+                )?;
+            }
+            CertStoreCommands::Delete {
+                location,
+                store,
+                thumbprint,
+                force,
+            } => {
+                win_certmgr::delete_from_store(&location, &store, &thumbprint, force)?;
+            }
+            CertStoreCommands::Browse => {
+                win_certmgr::launch_certmgr(None)?;
+            }
+        },
     }
     Ok(())
 }
@@ -614,6 +775,15 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "CA: List Profiles",
                     "View available SSL certificate types",
                 );
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            menu = menu.item(
+                20,
+                "Windows Certificate Manager",
+                "Browse and manage Windows certificate stores",
+            );
         }
 
         menu = menu.item(99, "Exit", "Close the application");
@@ -1041,6 +1211,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         eprintln!("Error fetching SSL profiles: {}", e);
                     }
                 }
+            }
+            #[cfg(target_os = "windows")]
+            20 => {
+                outro("Launching Windows Certificate Manager")?;
+                win_certmgr::launch_certmgr(None)?;
+                intro("SSL/TLS Security Toolbox")?;
             }
             _ => break,
         }

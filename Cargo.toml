@@ -5,6 +5,7 @@ members = [
     "crates/ssl-toolbox-core",
     "crates/ssl-toolbox-ca",
     "crates/ssl-toolbox-ca-sectigo",
+    "crates/ssl-toolbox-win-certstore",
 ]
 
 [workspace.package]
@@ -15,8 +16,10 @@ edition = "2024"
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 cliclack = "0.3"
+crossterm = "0.28"
 dotenvy = "0.15"
 openssl = { version = "0.10", features = ["vendored"] }
+ratatui = "0.29"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -24,3 +27,4 @@ serde_json = "1.0"
 ssl-toolbox-core = { path = "crates/ssl-toolbox-core" }
 ssl-toolbox-ca = { path = "crates/ssl-toolbox-ca" }
 ssl-toolbox-ca-sectigo = { path = "crates/ssl-toolbox-ca-sectigo" }
+ssl-toolbox-win-certstore = { path = "crates/ssl-toolbox-win-certstore" }

@@ -11,7 +11,7 @@ env:
 
 jobs:
   ci:
-    name: Check / Test / Lint
+    name: Check / Test / Lint (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +32,27 @@ jobs:
         run: cargo check --workspace
 
       - name: Test
+        env:
+          SSL_TOOLBOX_ENABLE_WINDOWS_LIVE_TESTS: "1"
         run: cargo test --workspace
 
       - name: Check (no default features)
         run: cargo check -p ssl-toolbox --no-default-features
+
+  windows:
+    name: Build / Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-latest
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test
+        run: cargo test --workspace
