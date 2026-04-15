@@ -1966,33 +1966,95 @@ fn preferred_artifact_kind_for_key(key: &str) -> Option<ArtifactKind> {
 }
 
 fn print_dashboard(state: &settings::UiState, workspace: &WorkspaceSnapshot) {
+    fn artifact_color(kind: ArtifactKind) -> Color {
+        match kind {
+            ArtifactKind::Config => Color::Green,
+            ArtifactKind::Key | ArtifactKind::Csr | ArtifactKind::Cert | ArtifactKind::Chain => {
+                Color::Magenta
+            }
+            ArtifactKind::Pfx | ArtifactKind::LegacyPfx => Color::Cyan,
+        }
+    }
+
+    fn home_relative(path: &Path) -> String {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from));
+        if let Some(home) = home
+            && let Ok(rel) = path.strip_prefix(&home)
+        {
+            let shown = rel.display().to_string();
+            return if shown.is_empty() {
+                "~".to_string()
+            } else {
+                format!("~/{}", shown)
+            };
+        }
+        path.display().to_string()
+    }
+
+    fn label(text: &str) -> String {
+        format!("{:<10}", text).dark_grey().bold().to_string()
+    }
+
+    let pad = "          "; // 10 spaces, matches label width
+
     println!();
-    println!("Workspace: {}", workspace.root.display());
+    println!(
+        " {}  {}",
+        label("Workspace"),
+        home_relative(&workspace.root)
+    );
+
     if let Some(profile) = &state.workflow.active_profile {
-        println!("Active Profile: {}", profile);
+        println!(
+            " {}  {}",
+            label("Profile"),
+            profile.clone().with(Color::Yellow).bold()
+        );
     }
-    let artifact_summary = state
-        .workflow
-        .artifact_pairs()
-        .into_iter()
-        .map(|(kind, path)| format!("{}={}", kind.key(), display_path(&path)))
-        .collect::<Vec<_>>();
-    if !artifact_summary.is_empty() {
-        println!("Workflow: {}", artifact_summary.join("  "));
+
+    let pairs = state.workflow.artifact_pairs();
+    for (i, (kind, path)) in pairs.iter().enumerate() {
+        let row_label = if i == 0 {
+            label("Workflow")
+        } else {
+            pad.to_string()
+        };
+        let key = format!("{:<10}", kind.key())
+            .with(artifact_color(*kind))
+            .bold();
+        let shown = home_relative(Path::new(path));
+        let exists = Path::new(path).exists();
+        if exists {
+            println!(" {}  {} {}", row_label, key, shown);
+        } else {
+            println!(
+                " {}  {} {} {}",
+                row_label,
+                key,
+                shown,
+                "(missing)".with(Color::Red).bold()
+            );
+        }
     }
+
     if let Some(job) = state.recent_jobs.first() {
-        println!("Last Job: {}", job.summary);
+        println!(
+            " {}  {}",
+            label("Last Job"),
+            job.summary.clone().with(Color::Yellow)
+        );
     }
+
     let top_files = workspace.top_files(5);
     if !top_files.is_empty() {
-        println!(
-            "Workspace Files: {}",
-            top_files
-                .into_iter()
-                .map(|path| display_path(&path))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let joined = top_files
+            .into_iter()
+            .map(|p| home_relative(Path::new(&p)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(" {}  {}", label("Files"), joined.dark_grey());
     }
 }
 
