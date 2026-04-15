@@ -7,7 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use cliclack::{confirm, input, intro, outro, password, select};
 use dotenvy::dotenv;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ssl_toolbox_core::{ConfigInputs, CsrDefaults};
 
@@ -705,136 +705,76 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
     #[cfg(not(feature = "sectigo"))]
     let _ = debug;
 
-    let app_config = settings::load_config();
+    let mut app_config = settings::load_config();
 
     intro("SSL/TLS Security Toolbox")?;
 
     loop {
-        let mut menu = select("What would you like to do?")
-            .item(
-                0,
-                "Generate Key and CSR",
-                "Build a new key and CSR from a config file",
-            )
-            .item(1, "Create PFX", "Combine key and cert into a PFX file")
-            .item(
-                2,
-                "Create Legacy PFX",
-                "Convert existing PFX to TripleDES-SHA1 format",
-            )
-            .item(
-                3,
-                "Generate New OpenSSL Config",
-                "Build a .cnf file from scratch via prompts",
-            )
-            .item(
-                4,
-                "Generate Config from Cert/CSR",
-                "Create a .cnf file from existing data",
-            )
-            .item(
-                5,
-                "View Certificate Details",
-                "Display details of an existing certificate",
-            )
-            .item(6, "View CSR Details", "Display details of an existing CSR")
-            .item(
-                7,
-                "View PFX Contents",
-                "Display certs and chain inside a PFX/PKCS12 file",
-            )
-            .item(
-                8,
-                "Verify HTTPS Endpoint",
-                "Check TLS cert and protocol for an HTTPS server",
-            )
-            .item(
-                9,
-                "Verify LDAPS Endpoint",
-                "Check TLS cert and protocol for an LDAPS server",
-            )
-            .item(
-                10,
-                "Verify SMTP Endpoint",
-                "Check TLS cert via SMTP STARTTLS",
-            )
-            .item(
-                11,
-                "Convert Certificate Format",
-                "Convert between PEM, DER, and Base64",
-            )
-            .item(
-                12,
-                "Identify Certificate Format",
-                "Auto-detect a certificate file's format",
-            );
-
-        #[cfg(feature = "sectigo")]
-        {
-            menu = menu
-                .item(13, "CA: Submit CSR", "Submit CSR to CA for signing")
-                .item(
-                    14,
-                    "CA: List Profiles",
-                    "View available SSL certificate types",
-                );
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            menu = menu.item(
-                20,
-                "Windows Certificate Manager",
-                "Browse and manage Windows certificate stores",
-            );
-        }
-
-        menu = menu.item(99, "Exit", "Close the application");
-
-        let selection: i32 = menu.interact()?;
+        let menu = build_main_menu();
+        print_main_menu(&menu);
+        let selection = prompt_main_menu_choice(&menu, &mut app_config.ui_state)?;
 
         match selection {
+            -1 => continue,
             0 => {
-                let conf: String = input("Path to openssl.conf").interact()?;
+                let conf = prompt_path(
+                    &mut app_config.ui_state,
+                    "generate.conf",
+                    "Path to openssl.conf",
+                    None,
+                )?;
                 let default_key = derive_path(&conf, "key");
                 let default_csr = derive_path(&conf, "csr");
 
-                let key: String = if !default_key.is_empty() {
-                    input("Path to output .key file")
-                        .default_input(&default_key)
-                        .interact()?
-                } else {
-                    input("Path to output .key file").interact()?
-                };
-
-                let csr: String = if !default_csr.is_empty() {
-                    input("Path to output .csr file")
-                        .default_input(&default_csr)
-                        .interact()?
-                } else {
-                    input("Path to output .csr file").interact()?
-                };
+                let key = prompt_path(
+                    &mut app_config.ui_state,
+                    "generate.key",
+                    "Path to output .key file",
+                    non_empty(default_key),
+                )?;
+                let csr = prompt_path(
+                    &mut app_config.ui_state,
+                    "generate.csr",
+                    "Path to output .csr file",
+                    non_empty(default_csr),
+                )?;
 
                 let pass: String = password("Enter password for private key").interact()?;
                 ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
-                println!("Success: Generated {} and {}", key, csr);
+                println!(
+                    "Success: Generated {} and {}",
+                    display_path(&key),
+                    display_path(&csr)
+                );
             }
             1 => {
-                let key: String = input("Path to .key file").interact()?;
+                let key = prompt_path(
+                    &mut app_config.ui_state,
+                    "pfx.key",
+                    "Path to .key file",
+                    None,
+                )?;
+                let default_cert = derive_path(&key, "crt");
                 let default_pfx = derive_path(&key, "pfx");
 
-                let cert: String = input("Path to signed .crt file").interact()?;
-                let chain: String = input("Path to chain file (optional)")
-                    .required(false)
-                    .interact()?;
-
-                let out: String = if !default_pfx.is_empty() {
-                    input("Path to output .pfx file")
-                        .default_input(&default_pfx)
-                        .interact()?
-                } else {
-                    input("Path to output .pfx file").interact()?
-                };
+                let cert = prompt_path(
+                    &mut app_config.ui_state,
+                    "pfx.cert",
+                    "Path to signed .crt file",
+                    non_empty(default_cert),
+                )?;
+                let chain = prompt_optional_path(
+                    &mut app_config.ui_state,
+                    "pfx.chain",
+                    "Path to chain file (optional)",
+                    None,
+                )?;
+                let out = prompt_path(
+                    &mut app_config.ui_state,
+                    "pfx.output",
+                    "Path to output .pfx file",
+                    non_empty(default_pfx),
+                )?;
 
                 let use_legacy: bool = confirm("Use legacy TripleDES-SHA1 encryption?")
                     .initial_value(false)
@@ -855,11 +795,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 };
 
                 let pfx_pass: String = password("Enter password for PFX export").interact()?;
-                let chain_opt = if chain.is_empty() {
-                    None
-                } else {
-                    Some(chain.as_str())
-                };
+                let chain_opt = chain.as_deref();
 
                 if use_legacy {
                     ssl_toolbox_core::pfx::create_pfx_legacy(
@@ -870,7 +806,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         key_pass_opt,
                         &pfx_pass,
                     )?;
-                    println!("Success: Legacy PFX created at {}", out);
+                    println!("Success: Legacy PFX created at {}", display_path(&out));
                 } else {
                     ssl_toolbox_core::pfx::create_pfx(
                         &key,
@@ -880,19 +816,23 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         key_pass_opt,
                         &pfx_pass,
                     )?;
-                    println!("Success: PFX created at {}", out);
+                    println!("Success: PFX created at {}", display_path(&out));
                 }
             }
             2 => {
-                let input_path: String = input("Path to existing PFX file").interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "pfx_legacy.input",
+                    "Path to existing PFX file",
+                    None,
+                )?;
                 let default_out = derive_path(&input_path, "legacy.pfx");
-                let out: String = if !default_out.is_empty() {
-                    input("Path to output legacy PFX file")
-                        .default_input(&default_out)
-                        .interact()?
-                } else {
-                    input("Path to output legacy PFX file").interact()?
-                };
+                let out = prompt_path(
+                    &mut app_config.ui_state,
+                    "pfx_legacy.output",
+                    "Path to output legacy PFX file",
+                    non_empty(default_out),
+                )?;
 
                 let input_pass: String = password("Enter password for input PFX").interact()?;
                 let output_pass: String = password("Enter password for output PFX").interact()?;
@@ -904,37 +844,60 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     &out,
                     &output_pass,
                 )?;
-                println!("Success: Legacy PFX (TripleDES-SHA1) created at {}", out);
+                println!(
+                    "Success: Legacy PFX (TripleDES-SHA1) created at {}",
+                    display_path(&out)
+                );
             }
             3 => {
                 let inputs = prompt_config_inputs(&app_config.csr_defaults)?;
                 let default_path = format!("{}.cnf", inputs.common_name);
-                let output_path: String = input("Output .cnf file path")
-                    .default_input(&default_path)
-                    .interact()?;
+                let output_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "new_config.output",
+                    "Output .cnf file path",
+                    Some(default_path),
+                )?;
                 print_config_summary(&inputs, &output_path);
                 let confirmed: bool = confirm("Write this config file?").interact()?;
                 if confirmed {
                     ssl_toolbox_core::config::generate_conf_from_inputs(&inputs, &output_path)?;
-                    println!("Success: OpenSSL config written to {}", output_path);
+                    println!(
+                        "Success: OpenSSL config written to {}",
+                        display_path(&output_path)
+                    );
                 } else {
                     println!("Cancelled.");
                 }
             }
             4 => {
-                let input_path: String = input("Path to existing .cer or .csr").interact()?;
-                let out: String = input("Path to output .conf file").interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "config_from_existing.input",
+                    "Path to existing .cer or .csr",
+                    None,
+                )?;
+                let out = prompt_path(
+                    &mut app_config.ui_state,
+                    "config_from_existing.output",
+                    "Path to output .conf file",
+                    non_empty(derive_path(&input_path, "conf")),
+                )?;
                 let is_csr = input_path.ends_with(".csr");
                 ssl_toolbox_core::config::generate_conf_from_cert_or_csr(
                     &input_path,
                     &out,
                     is_csr,
                 )?;
-                println!("Success: OpenSSL config written to {}", out);
+                println!("Success: OpenSSL config written to {}", display_path(&out));
             }
             5 => {
-                let input_path: String =
-                    input("Path to certificate file (.crt, .cer, .pem)").interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "view_cert.input",
+                    "Path to certificate file (.crt, .cer, .pem)",
+                    None,
+                )?;
                 match std::fs::read(&input_path) {
                     Ok(cert_content) => {
                         display::display_cert_chain(&cert_content, "Certificate Details");
@@ -945,7 +908,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 }
             }
             6 => {
-                let input_path: String = input("Path to CSR file (.csr)").interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "view_csr.input",
+                    "Path to CSR file (.csr)",
+                    None,
+                )?;
                 println!("\n╔═══════════════════════════════════════════════════════════════╗");
                 println!("║                        CSR Details                           ║");
                 println!("╚═══════════════════════════════════════════════════════════════╝\n");
@@ -968,7 +936,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 }
             }
             7 => {
-                let input_path: String = input("Path to PFX file (.pfx, .p12)").interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "view_pfx.input",
+                    "Path to PFX file (.pfx, .p12)",
+                    None,
+                )?;
                 let pfx_pass: String = password("Enter PFX password").interact()?;
                 match std::fs::read(&input_path) {
                     Ok(pfx_bytes) => {
@@ -1044,8 +1017,6 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 }
             }
             11 => {
-                let input_path: String = input("Path to certificate file").interact()?;
-                let output_path: String = input("Path to output file").interact()?;
                 let format: String = select("Target format")
                     .item("der".to_string(), "DER", "Binary ASN.1 encoding")
                     .item("pem".to_string(), "PEM", "Base64 with headers")
@@ -1055,45 +1026,77 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         "Raw base64 (no PEM headers)",
                     )
                     .interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "convert.input",
+                    "Path to certificate file",
+                    None,
+                )?;
+                let output_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "convert.output",
+                    "Path to output file",
+                    non_empty(derive_path(
+                        &input_path,
+                        match format.as_str() {
+                            "der" => "der",
+                            "pem" => "pem",
+                            "base64" => "b64",
+                            _ => unreachable!(),
+                        },
+                    )),
+                )?;
 
                 match format.as_str() {
                     "der" => {
                         ssl_toolbox_core::convert::pem_to_der(&input_path, &output_path)?;
-                        println!("Success: Converted to DER: {}", output_path);
+                        println!("Success: Converted to DER: {}", display_path(&output_path));
                     }
                     "pem" => {
                         ssl_toolbox_core::convert::der_to_pem(&input_path, &output_path)?;
-                        println!("Success: Converted to PEM: {}", output_path);
+                        println!("Success: Converted to PEM: {}", display_path(&output_path));
                     }
                     "base64" => {
                         ssl_toolbox_core::convert::pem_to_base64(&input_path, &output_path)?;
-                        println!("Success: Converted to Base64: {}", output_path);
+                        println!(
+                            "Success: Converted to Base64: {}",
+                            display_path(&output_path)
+                        );
                     }
                     _ => unreachable!(),
                 }
             }
             12 => {
-                let input_path: String = input("Path to certificate file").interact()?;
+                let input_path = prompt_path(
+                    &mut app_config.ui_state,
+                    "identify.input",
+                    "Path to certificate file",
+                    None,
+                )?;
                 let data = std::fs::read(&input_path)?;
                 let format = ssl_toolbox_core::convert::detect_format(&data);
                 let desc = ssl_toolbox_core::convert::format_description(format);
-                println!("\nFile: {}", input_path);
+                println!("\nFile: {}", display_path(&input_path));
                 println!("Format: {}", desc);
             }
             #[cfg(feature = "sectigo")]
             13 => {
                 let plugin = get_ca_plugin(debug)?;
 
-                let csr: String = input("Path to .csr file").interact()?;
+                let csr = prompt_path(
+                    &mut app_config.ui_state,
+                    "ca_submit.csr",
+                    "Path to .csr file",
+                    None,
+                )?;
                 let default_crt = derive_path(&csr, "crt");
 
-                let out: String = if !default_crt.is_empty() {
-                    input("Path to output signed .crt file")
-                        .default_input(&default_crt)
-                        .interact()?
-                } else {
-                    input("Path to output signed .crt file").interact()?
-                };
+                let out = prompt_path(
+                    &mut app_config.ui_state,
+                    "ca_submit.output",
+                    "Path to output signed .crt file",
+                    non_empty(default_crt),
+                )?;
 
                 let description: String = input("Optional enrollment description (comments)")
                     .required(false)
@@ -1176,7 +1179,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     cert_content.as_bytes(),
                     "Downloaded Certificate Details",
                 );
-                println!("Success: Certificate saved to {}", out);
+                println!("Success: Certificate saved to {}", display_path(&out));
             }
             #[cfg(feature = "sectigo")]
             14 => {
@@ -1376,4 +1379,249 @@ fn derive_path(base_path: &str, new_ext: &str) -> String {
         return new_path.display().to_string();
     }
     String::new()
+}
+
+#[derive(Clone, Copy)]
+struct MenuItem {
+    action: i32,
+    alias: &'static str,
+    title: &'static str,
+    description: &'static str,
+}
+
+fn build_main_menu() -> Vec<MenuItem> {
+    let mut items = vec![
+        MenuItem {
+            action: 0,
+            alias: "g",
+            title: "Generate Key and CSR",
+            description: "Build a new key and CSR from a config file",
+        },
+        MenuItem {
+            action: 1,
+            alias: "pfx",
+            title: "Create PFX",
+            description: "Combine key and cert into a PFX file",
+        },
+        MenuItem {
+            action: 2,
+            alias: "legacy",
+            title: "Create Legacy PFX",
+            description: "Convert existing PFX to TripleDES-SHA1 format",
+        },
+        MenuItem {
+            action: 3,
+            alias: "new",
+            title: "Generate New OpenSSL Config",
+            description: "Build a .cnf file from scratch via prompts",
+        },
+        MenuItem {
+            action: 4,
+            alias: "config",
+            title: "Generate Config from Cert/CSR",
+            description: "Create a .cnf file from existing data",
+        },
+        MenuItem {
+            action: 5,
+            alias: "cert",
+            title: "View Certificate Details",
+            description: "Display details of an existing certificate",
+        },
+        MenuItem {
+            action: 6,
+            alias: "csr",
+            title: "View CSR Details",
+            description: "Display details of an existing CSR",
+        },
+        MenuItem {
+            action: 7,
+            alias: "vpfx",
+            title: "View PFX Contents",
+            description: "Display certs and chain inside a PFX/PKCS12 file",
+        },
+        MenuItem {
+            action: 8,
+            alias: "https",
+            title: "Verify HTTPS Endpoint",
+            description: "Check TLS cert and protocol for an HTTPS server",
+        },
+        MenuItem {
+            action: 9,
+            alias: "ldaps",
+            title: "Verify LDAPS Endpoint",
+            description: "Check TLS cert and protocol for an LDAPS server",
+        },
+        MenuItem {
+            action: 10,
+            alias: "smtp",
+            title: "Verify SMTP Endpoint",
+            description: "Check TLS cert via SMTP STARTTLS",
+        },
+        MenuItem {
+            action: 11,
+            alias: "convert",
+            title: "Convert Certificate Format",
+            description: "Convert between PEM, DER, and Base64",
+        },
+        MenuItem {
+            action: 12,
+            alias: "id",
+            title: "Identify Certificate Format",
+            description: "Auto-detect a certificate file's format",
+        },
+    ];
+
+    #[cfg(feature = "sectigo")]
+    {
+        items.push(MenuItem {
+            action: 13,
+            alias: "submit",
+            title: "CA: Submit CSR",
+            description: "Submit CSR to CA for signing",
+        });
+        items.push(MenuItem {
+            action: 14,
+            alias: "profiles",
+            title: "CA: List Profiles",
+            description: "View available SSL certificate types",
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        items.push(MenuItem {
+            action: 20,
+            alias: "win",
+            title: "Windows Certificate Manager",
+            description: "Browse and manage Windows certificate stores",
+        });
+    }
+
+    items.push(MenuItem {
+        action: 99,
+        alias: "q",
+        title: "Exit",
+        description: "Close the application",
+    });
+
+    items
+}
+
+fn print_main_menu(items: &[MenuItem]) {
+    println!();
+    println!("Quick Menu");
+    for (index, item) in items.iter().enumerate() {
+        println!(
+            "  {:>2}. {:<8} {}",
+            index + 1,
+            format!("[{}]", item.alias),
+            item.title
+        );
+        println!("      {}", item.description);
+    }
+    println!();
+}
+
+fn prompt_main_menu_choice(items: &[MenuItem], state: &mut settings::UiState) -> Result<i32> {
+    let default_choice = if state.last_menu_choice.is_empty() {
+        items.first().map(|item| item.alias).unwrap_or("q")
+    } else {
+        state.last_menu_choice.as_str()
+    };
+
+    let raw: String = input("Choose an action (number or alias)")
+        .default_input(default_choice)
+        .interact()?;
+    let choice = raw.trim().to_ascii_lowercase();
+
+    if let Ok(number) = choice.parse::<usize>()
+        && number > 0
+        && let Some(item) = items.get(number - 1)
+    {
+        state.remember_menu_choice(item.alias);
+        persist_ui_state(state);
+        return Ok(item.action);
+    }
+
+    if let Some(item) = items.iter().find(|item| item.alias == choice) {
+        state.remember_menu_choice(item.alias);
+        persist_ui_state(state);
+        return Ok(item.action);
+    }
+
+    if matches!(choice.as_str(), "exit" | "quit") {
+        state.remember_menu_choice("q");
+        persist_ui_state(state);
+        return Ok(99);
+    }
+
+    eprintln!("Unknown selection '{}'. Use a menu number or alias.", raw);
+    Ok(-1)
+}
+
+fn prompt_path(
+    state: &mut settings::UiState,
+    key: &str,
+    label: &str,
+    suggested: Option<String>,
+) -> Result<String> {
+    prompt_path_inner(state, key, label, suggested, true).map(|value| value.unwrap_or_default())
+}
+
+fn prompt_optional_path(
+    state: &mut settings::UiState,
+    key: &str,
+    label: &str,
+    suggested: Option<String>,
+) -> Result<Option<String>> {
+    prompt_path_inner(state, key, label, suggested, false)
+}
+
+fn prompt_path_inner(
+    state: &mut settings::UiState,
+    key: &str,
+    label: &str,
+    suggested: Option<String>,
+    required: bool,
+) -> Result<Option<String>> {
+    let default_value = suggested.or_else(|| state.recent_path(key).map(ToOwned::to_owned));
+    let default_display = default_value.as_ref().map(|value| display_path(value));
+
+    let mut builder = input(label);
+    if let Some(default_display) = default_display.as_deref() {
+        builder = builder.default_input(default_display);
+    }
+    if !required {
+        builder = builder.required(false);
+    }
+
+    let raw: String = builder.interact()?;
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let resolved = resolve_path(&raw);
+    state.remember_path(key, &resolved);
+    persist_ui_state(state);
+    Ok(Some(resolved))
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
+}
+
+fn resolve_path(raw: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    settings::resolve_path_from(&cwd, raw).display().to_string()
+}
+
+fn display_path(path: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    settings::display_path_from(&cwd, Path::new(path))
+}
+
+fn persist_ui_state(state: &settings::UiState) {
+    if let Err(error) = settings::save_state(state) {
+        eprintln!("Warning: could not save breadcrumb state: {}", error);
+    }
 }

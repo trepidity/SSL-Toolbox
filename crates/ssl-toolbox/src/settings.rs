@@ -1,8 +1,34 @@
+use serde::{Deserialize, Serialize};
 use ssl_toolbox_core::CsrDefaults;
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub struct AppConfig {
     pub csr_defaults: CsrDefaults,
+    pub ui_state: UiState,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiState {
+    #[serde(default)]
+    pub recent_paths: BTreeMap<String, String>,
+    #[serde(default)]
+    pub last_menu_choice: String,
+}
+
+impl UiState {
+    pub fn recent_path(&self, key: &str) -> Option<&str> {
+        self.recent_paths.get(key).map(String::as_str)
+    }
+
+    pub fn remember_path(&mut self, key: &str, value: &str) {
+        self.recent_paths.insert(key.to_string(), value.to_string());
+    }
+
+    pub fn remember_menu_choice(&mut self, choice: &str) {
+        self.last_menu_choice = choice.to_string();
+    }
 }
 
 /// Load config by merging: compiled defaults < ~/.ssl-toolbox/config.json < ./.ssl-toolbox/config.json
@@ -20,7 +46,32 @@ pub fn load_config() -> AppConfig {
 
     AppConfig {
         csr_defaults: defaults,
+        ui_state: load_state(),
     }
+}
+
+pub fn load_state() -> UiState {
+    let Some(path) = state_path() else {
+        return UiState::default();
+    };
+
+    match std::fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => UiState::default(),
+    }
+}
+
+pub fn save_state(state: &UiState) -> anyhow::Result<()> {
+    let Some(path) = state_path() else {
+        return Ok(());
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(path, serde_json::to_string_pretty(state)?)?;
+    Ok(())
 }
 
 /// Load a CA plugin config file by name (e.g., "sectigo") from the config directories.
@@ -71,6 +122,55 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+fn state_path() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".ssl-toolbox").join("state.json"))
+}
+
+pub fn resolve_path_from(base_dir: &Path, raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if let Some(home) = home_dir()
+        && let Some(rest) = trimmed.strip_prefix("~/")
+    {
+        return home.join(rest);
+    }
+    if trimmed == "~"
+        && let Some(home) = home_dir()
+    {
+        return home;
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        path
+    } else {
+        base_dir.join(path)
+    }
+}
+
+pub fn display_path_from(base_dir: &Path, path: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(base_dir) {
+        let display = relative.display().to_string();
+        return if display.is_empty() {
+            ".".to_string()
+        } else {
+            display
+        };
+    }
+
+    if let Some(home) = home_dir()
+        && let Ok(relative) = path.strip_prefix(&home)
+    {
+        let display = relative.display().to_string();
+        return if display.is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{}", display)
+        };
+    }
+
+    path.display().to_string()
 }
 
 /// Merge non-empty fields from `overlay` into `base`.
@@ -128,4 +228,23 @@ pub fn init_config(dir: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
     }
 
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_relative_paths_against_base_dir() {
+        let base = Path::new("/tmp/project");
+        let resolved = resolve_path_from(base, "certs/server.pem");
+        assert_eq!(resolved, PathBuf::from("/tmp/project/certs/server.pem"));
+    }
+
+    #[test]
+    fn display_path_prefers_relative_when_under_base_dir() {
+        let base = Path::new("/tmp/project");
+        let display = display_path_from(base, Path::new("/tmp/project/certs/server.pem"));
+        assert_eq!(display, "certs/server.pem");
+    }
 }

@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -1191,7 +1192,7 @@ pub fn delete_from_store(location: &str, store: &str, thumbprint: &str, force: b
 }
 
 fn import_interactive(location: StoreLocation, store: &str) -> Result<()> {
-    let file_path: String = input("Path to certificate file").interact()?;
+    let file_path = prompt_breadcrumb_path("win_certmgr.import.file", "Path to certificate file")?;
     let password_input: String = password("PFX password (leave blank if not needed)")
         .allow_empty()
         .interact()?;
@@ -1229,9 +1230,11 @@ fn export_interactive(
         )
         .interact()?;
     let default_name = default_export_filename(&cert.thumbprint, &format);
-    let out: String = input("Output path")
-        .default_input(&default_name)
-        .interact()?;
+    let out = prompt_breadcrumb_path_with_default(
+        "win_certmgr.export.output",
+        "Output path",
+        Some(default_name),
+    )?;
     let pfx_password = if format == "pfx" {
         let value: String = password("PFX export password").interact()?;
         Some(value)
@@ -1252,7 +1255,7 @@ fn export_interactive(
     } else {
         export_certificate_by_path(&cert.path, &out, export_format, pfx_password)?;
     }
-    println!("Exported to {}", out);
+    println!("Exported to {}", display_breadcrumb_path(&out));
     Ok(())
 }
 
@@ -1450,6 +1453,49 @@ fn short_subject(subject: &str) -> String {
 
 fn default_export_filename(thumbprint: &str, format: &str) -> String {
     format!("cert-{}.{}", short_thumbprint(thumbprint), format)
+}
+
+fn prompt_breadcrumb_path(key: &str, label: &str) -> Result<String> {
+    prompt_breadcrumb_path_with_default(key, label, None)
+}
+
+fn prompt_breadcrumb_path_with_default(
+    key: &str,
+    label: &str,
+    suggested: Option<String>,
+) -> Result<String> {
+    let mut state = crate::settings::load_state();
+    let default_value = suggested.or_else(|| state.recent_path(key).map(str::to_owned));
+    let default_display = default_value.as_deref().map(display_breadcrumb_path);
+
+    let mut builder = input(label);
+    if let Some(default_display) = default_display.as_deref() {
+        builder = builder.default_input(default_display);
+    }
+
+    let raw: String = builder.interact()?;
+    let resolved = resolve_breadcrumb_path(&raw);
+    state.remember_path(key, &resolved);
+    persist_breadcrumb_state(&state);
+    Ok(resolved)
+}
+
+fn resolve_breadcrumb_path(raw: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::settings::resolve_path_from(&cwd, raw)
+        .display()
+        .to_string()
+}
+
+fn display_breadcrumb_path(path: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::settings::display_path_from(&cwd, Path::new(path))
+}
+
+fn persist_breadcrumb_state(state: &crate::settings::UiState) {
+    if let Err(error) = crate::settings::save_state(state) {
+        eprintln!("Warning: could not save breadcrumb state: {}", error);
+    }
 }
 
 fn bool_or_unknown(value: Option<bool>) -> &'static str {
