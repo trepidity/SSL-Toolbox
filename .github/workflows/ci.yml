@@ -16,6 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -32,12 +37,40 @@ jobs:
         run: cargo check --workspace
 
       - name: Test
-        env:
-          SSL_TOOLBOX_ENABLE_WINDOWS_LIVE_TESTS: "1"
         run: cargo test --workspace
 
       - name: Check (no default features)
         run: cargo check -p ssl-toolbox --no-default-features
+
+  coverage:
+    name: Coverage (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+
+      - name: Generate coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
 
   windows:
     name: Build / Test (Windows)
@@ -55,4 +88,6 @@ jobs:
         run: cargo build --workspace
 
       - name: Test
+        env:
+          SSL_TOOLBOX_ENABLE_WINDOWS_LIVE_TESTS: "1"
         run: cargo test --workspace
