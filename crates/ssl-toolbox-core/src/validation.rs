@@ -1,8 +1,9 @@
 use openssl::ssl::SslRef;
 use openssl::stack::Stack;
+use openssl::x509::X509StoreContext;
 use openssl::x509::store::X509StoreBuilder;
-use openssl::x509::{X509, X509StoreContext};
 
+use crate::x509_utils::collect_peer_chain;
 use crate::{CertValidation, ValidationResult};
 
 /// Check if a hostname matches a pattern (supports wildcard matching).
@@ -150,14 +151,12 @@ fn validate_chain(ssl: &SslRef) -> ValidationResult {
         }
     };
 
-    // Build the chain from the peer cert chain
+    // `peer_cert_chain()` on the client side includes the leaf certificate.
+    // Normalize the chain first so we don't pass the leaf twice to OpenSSL.
+    let normalized_chain = collect_peer_chain(ssl);
     let mut chain = Stack::new().unwrap();
-    if let Some(peer_chain) = ssl.peer_cert_chain() {
-        for c in peer_chain {
-            if let Ok(owned) = X509::from_der(&c.to_der().unwrap_or_default()) {
-                let _ = chain.push(owned);
-            }
-        }
+    for cert in normalized_chain.into_iter().skip(1) {
+        let _ = chain.push(cert);
     }
 
     // Build trust store using system default paths

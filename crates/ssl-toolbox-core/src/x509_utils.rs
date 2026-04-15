@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use openssl::nid::Nid;
 use openssl::ssl::SslRef;
 use openssl::x509::{X509, X509Ref};
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::CertDetails;
@@ -76,15 +77,56 @@ pub fn x509_to_cert_details(cert: &X509Ref) -> CertDetails {
     }
 }
 
+fn push_unique_cert(cert: &X509Ref, chain: &mut Vec<X509>, seen: &mut HashSet<Vec<u8>>) {
+    let Ok(der) = cert.to_der() else {
+        return;
+    };
+
+    if !seen.insert(der.clone()) {
+        return;
+    }
+
+    if let Ok(owned) = X509::from_der(&der) {
+        chain.push(owned);
+    }
+}
+
+fn build_peer_chain<'a, I>(leaf: Option<&'a X509Ref>, peer_chain: I) -> Vec<X509>
+where
+    I: IntoIterator<Item = &'a X509Ref>,
+{
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(leaf) = leaf {
+        push_unique_cert(leaf, &mut chain, &mut seen);
+    }
+
+    for cert in peer_chain {
+        push_unique_cert(cert, &mut chain, &mut seen);
+    }
+
+    chain
+}
+
+/// Collect the peer chain in leaf-first order with duplicate certificates removed.
+pub fn collect_peer_chain(ssl: &SslRef) -> Vec<X509> {
+    let leaf = ssl.peer_certificate();
+
+    match ssl.peer_cert_chain() {
+        Some(cert_stack) => {
+            build_peer_chain(leaf.as_ref().map(|cert| cert.as_ref()), cert_stack.iter())
+        }
+        None => build_peer_chain(leaf.as_ref().map(|cert| cert.as_ref()), std::iter::empty()),
+    }
+}
+
 /// Extract certificate chain details from the SSL connection.
 pub fn extract_chain_from_ssl(ssl: &SslRef) -> Vec<CertDetails> {
-    let mut chain = Vec::new();
-    if let Some(cert_stack) = ssl.peer_cert_chain() {
-        for cert in cert_stack {
-            chain.push(x509_to_cert_details(cert));
-        }
-    }
-    chain
+    collect_peer_chain(ssl)
+        .iter()
+        .map(|cert| x509_to_cert_details(cert.as_ref()))
+        .collect()
 }
 
 /// Parse a certificate file (PEM or DER) and return ordered chain details.
@@ -175,4 +217,99 @@ pub fn extract_cert_chain_details(cert_file_content: &[u8]) -> Result<Vec<CertDe
 pub fn extract_cert_details(cert_content: &str) -> Result<CertDetails> {
     let cert = X509::from_pem(cert_content.as_bytes()).context("Failed to parse certificate")?;
     Ok(x509_to_cert_details(&cert))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::{BigNum, MsbOption};
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::x509::{X509, X509NameBuilder};
+
+    fn make_test_cert(common_name: &str, issuer_common_name: &str) -> X509 {
+        let rsa = Rsa::generate(2048).unwrap();
+        let key = PKey::from_rsa(rsa).unwrap();
+
+        let mut subject_name = X509NameBuilder::new().unwrap();
+        subject_name
+            .append_entry_by_nid(Nid::COMMONNAME, common_name)
+            .unwrap();
+        let subject_name = subject_name.build();
+
+        let mut issuer_name = X509NameBuilder::new().unwrap();
+        issuer_name
+            .append_entry_by_nid(Nid::COMMONNAME, issuer_common_name)
+            .unwrap();
+        let issuer_name = issuer_name.build();
+
+        let mut serial = BigNum::new().unwrap();
+        serial.rand(64, MsbOption::MAYBE_ZERO, false).unwrap();
+        let serial = serial.to_asn1_integer().unwrap();
+
+        let mut builder = openssl::x509::X509Builder::new().unwrap();
+        builder.set_version(2).unwrap();
+        builder.set_serial_number(&serial).unwrap();
+        builder.set_subject_name(&subject_name).unwrap();
+        builder.set_issuer_name(&issuer_name).unwrap();
+        builder.set_pubkey(&key).unwrap();
+        builder
+            .set_not_before(Asn1Time::days_from_now(0).unwrap().as_ref())
+            .unwrap();
+        builder
+            .set_not_after(Asn1Time::days_from_now(30).unwrap().as_ref())
+            .unwrap();
+        builder.sign(&key, MessageDigest::sha256()).unwrap();
+        builder.build()
+    }
+
+    #[test]
+    fn build_peer_chain_keeps_leaf_once_when_peer_chain_includes_it() {
+        let leaf = make_test_cert("leaf.example.com", "Test Intermediate");
+        let intermediate = make_test_cert("Test Intermediate", "Test Root");
+
+        let chain = build_peer_chain(Some(leaf.as_ref()), [leaf.as_ref(), intermediate.as_ref()]);
+
+        let common_names: Vec<_> = chain
+            .iter()
+            .map(|cert| x509_to_cert_details(cert.as_ref()).common_name)
+            .collect();
+
+        assert_eq!(common_names, vec!["leaf.example.com", "Test Intermediate"]);
+    }
+
+    #[test]
+    fn build_peer_chain_deduplicates_repeated_intermediates() {
+        let leaf = make_test_cert("leaf.example.com", "Test Intermediate");
+        let intermediate = make_test_cert("Test Intermediate", "Test Root");
+
+        let chain = build_peer_chain(
+            Some(leaf.as_ref()),
+            [leaf.as_ref(), intermediate.as_ref(), intermediate.as_ref()],
+        );
+
+        let common_names: Vec<_> = chain
+            .iter()
+            .map(|cert| x509_to_cert_details(cert.as_ref()).common_name)
+            .collect();
+
+        assert_eq!(common_names, vec!["leaf.example.com", "Test Intermediate"]);
+    }
+
+    #[test]
+    fn build_peer_chain_returns_leaf_when_no_peer_stack_is_present() {
+        let leaf = make_test_cert("leaf.example.com", "Test Intermediate");
+
+        let chain = build_peer_chain(Some(leaf.as_ref()), std::iter::empty());
+
+        let common_names: Vec<_> = chain
+            .iter()
+            .map(|cert| x509_to_cert_details(cert.as_ref()).common_name)
+            .collect();
+
+        assert_eq!(common_names, vec!["leaf.example.com"]);
+    }
 }

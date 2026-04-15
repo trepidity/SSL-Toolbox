@@ -155,6 +155,9 @@ cargo test --workspace                           # run tests
 cargo build --release -p ssl-toolbox             # release binary
 ```
 
+This repo includes a `.githooks/pre-push` hook that runs `cargo clippy --workspace -- -D warnings`.
+Enable it locally with `git config core.hooksPath .githooks`.
+
 ## License
 
 MIT OR Apache-2.0

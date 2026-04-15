@@ -7,11 +7,19 @@ use crate::CertFormat;
 
 /// Auto-detect the format of certificate data by inspecting markers and trying parsers.
 pub fn detect_format(data: &[u8]) -> CertFormat {
+    if is_pkcs7_pem(data) {
+        return CertFormat::Pkcs7;
+    }
+
     // Check for PEM markers
     if let Ok(text) = std::str::from_utf8(data)
         && text.contains("-----BEGIN ")
     {
         return CertFormat::Pem;
+    }
+
+    if is_pkcs7_der(data) {
+        return CertFormat::Pkcs7;
     }
 
     // Try PKCS12 (DER-encoded, starts with specific ASN.1 sequence)
@@ -42,6 +50,24 @@ pub fn detect_format(data: &[u8]) -> CertFormat {
     }
 
     CertFormat::Unknown
+}
+
+fn is_pkcs7_pem(data: &[u8]) -> bool {
+    if let Ok(text) = std::str::from_utf8(data) {
+        text.contains("-----BEGIN PKCS7-----") || text.contains("-----BEGIN CMS-----")
+    } else {
+        false
+    }
+}
+
+fn is_pkcs7_der(data: &[u8]) -> bool {
+    // PKCS#7 signedData OID: 1.2.840.113549.1.7.2
+    // DER-encoded: 06 09 2A 86 48 86 F7 0D 01 07 02
+    let oid = &[
+        0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02,
+    ];
+    let window = data.get(..data.len().min(30)).unwrap_or(data);
+    window.windows(oid.len()).any(|w| w == oid)
 }
 
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
@@ -148,7 +174,51 @@ pub fn format_description(format: CertFormat) -> &'static str {
         CertFormat::Pem => "PEM (Base64-encoded with headers)",
         CertFormat::Der => "DER (binary ASN.1)",
         CertFormat::Pkcs12 => "PKCS#12 / PFX (binary container)",
+        CertFormat::Pkcs7 => "PKCS#7 / P7B (certificate bundle)",
         CertFormat::Base64 => "Raw Base64 (no PEM headers)",
         CertFormat::Unknown => "Unknown format",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_pkcs7_pem_before_generic_pem() {
+        let data = b"-----BEGIN PKCS7-----\nMIIB\n-----END PKCS7-----\n";
+        assert_eq!(detect_format(data), CertFormat::Pkcs7);
+    }
+
+    #[test]
+    fn detects_pkcs7_cms_pem_before_generic_pem() {
+        let data = b"-----BEGIN CMS-----\nMIIB\n-----END CMS-----\n";
+        assert_eq!(detect_format(data), CertFormat::Pkcs7);
+    }
+
+    #[test]
+    fn detects_regular_pem_certificate() {
+        let data = b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+        assert_eq!(detect_format(data), CertFormat::Pem);
+    }
+
+    #[test]
+    fn detects_pkcs7_der_before_pkcs12_and_der_cert() {
+        let oid = [
+            0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02,
+        ];
+        let mut data = vec![0x30, 0x82, 0x01, 0x00, 0xA0];
+        data.extend_from_slice(&oid);
+        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+
+        assert_eq!(detect_format(&data), CertFormat::Pkcs7);
+    }
+
+    #[test]
+    fn format_description_includes_pkcs7() {
+        assert_eq!(
+            format_description(CertFormat::Pkcs7),
+            "PKCS#7 / P7B (certificate bundle)"
+        );
     }
 }

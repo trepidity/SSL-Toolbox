@@ -65,6 +65,7 @@ pub enum CertFormat {
     Pem,
     Der,
     Pkcs12,
+    Pkcs7,
     Base64,
     Unknown,
 }

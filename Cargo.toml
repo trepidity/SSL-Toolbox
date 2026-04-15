@@ -15,6 +15,7 @@ edition = "2024"
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 cliclack = "0.3"
+crossterm = "0.28"
 dotenvy = "0.15"
 openssl = { version = "0.10", features = ["vendored"] }
 reqwest = { version = "0.12", features = ["json", "blocking"] }
