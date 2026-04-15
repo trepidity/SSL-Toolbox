@@ -1,20 +1,30 @@
+use crate::workflow::{JobRecord, WorkflowMemory};
 use serde::{Deserialize, Serialize};
 use ssl_toolbox_core::CsrDefaults;
 use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub struct AppConfig {
     pub csr_defaults: CsrDefaults,
     pub ui_state: UiState,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UiState {
     #[serde(default)]
     pub recent_paths: BTreeMap<String, String>,
     #[serde(default)]
     pub last_menu_choice: String,
+    #[serde(default)]
+    pub workflow: WorkflowMemory,
+    #[serde(default)]
+    pub recent_jobs: Vec<JobRecord>,
 }
 
 impl UiState {
@@ -51,27 +61,11 @@ pub fn load_config() -> AppConfig {
 }
 
 pub fn load_state() -> UiState {
-    let Some(path) = state_path() else {
-        return UiState::default();
-    };
-
-    match std::fs::read_to_string(path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => UiState::default(),
-    }
+    load_state_from(home_dir())
 }
 
 pub fn save_state(state: &UiState) -> anyhow::Result<()> {
-    let Some(path) = state_path() else {
-        return Ok(());
-    };
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(path, serde_json::to_string_pretty(state)?)?;
-    Ok(())
+    save_state_to(home_dir(), state)
 }
 
 /// Load a CA plugin config file by name (e.g., "sectigo") from the config directories.
@@ -124,8 +118,78 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn state_path() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".ssl-toolbox").join("state.json"))
+fn state_path_in(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(|home| home.join(".ssl-toolbox").join("state.json"))
+}
+
+fn load_state_from(home: Option<PathBuf>) -> UiState {
+    let Some(path) = state_path_in(home) else {
+        return UiState::default();
+    };
+
+    match fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => UiState::default(),
+    }
+}
+
+fn save_state_to(home: Option<PathBuf>, state: &UiState) -> anyhow::Result<()> {
+    let Some(path) = state_path_in(home) else {
+        return Ok(());
+    };
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        set_private_dir_permissions(parent)?;
+    }
+
+    let contents = serde_json::to_string_pretty(state)?;
+    write_private_file(&path, contents.as_bytes())?;
+    Ok(())
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        file.flush()?;
+        set_private_file_permissions(path)?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, contents)?;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn set_private_dir_permissions(path: &Path) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_dir_permissions(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> anyhow::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
 }
 
 pub fn resolve_path_from(base_dir: &Path, raw: &str) -> PathBuf {
@@ -233,6 +297,7 @@ pub fn init_config(dir: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn resolves_relative_paths_against_base_dir() {
@@ -246,5 +311,90 @@ mod tests {
         let base = Path::new("/tmp/project");
         let display = display_path_from(base, Path::new("/tmp/project/certs/server.pem"));
         assert_eq!(display, "certs/server.pem");
+    }
+
+    fn temp_home_dir() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ssl-toolbox-settings-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp home");
+        dir
+    }
+
+    #[test]
+    fn save_state_round_trips_and_restricts_permissions() {
+        let home = temp_home_dir();
+        let mut state = UiState::default();
+        state.remember_path("key", "/tmp/project/keys/server.key");
+        state.remember_path("csr", "/tmp/project/csrs/server.csr");
+        state.remember_menu_choice("generate");
+        state.workflow.config = Some("/tmp/project/openssl.cnf".to_string());
+        state.workflow.key = Some("/tmp/project/keys/server.key".to_string());
+        state.workflow.active_profile = Some("web-server".to_string());
+        state.recent_jobs.push(
+            JobRecord::new(
+                crate::workflow::ActionKind::Generate,
+                "Generate key and CSR",
+            )
+            .with_input("key", "server.key")
+            .with_output("csr", "server.csr")
+            .with_replay_data("key_size", "4096"),
+        );
+
+        save_state_to(Some(home.clone()), &state).expect("save state");
+        let loaded = load_state_from(Some(home.clone()));
+
+        assert_eq!(loaded, state);
+
+        #[cfg(unix)]
+        {
+            let state_path = home.join(".ssl-toolbox").join("state.json");
+            let state_mode = fs::metadata(&state_path)
+                .expect("state metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            let dir_mode = fs::metadata(home.join(".ssl-toolbox"))
+                .expect("dir metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(state_mode, 0o600);
+            assert_eq!(dir_mode, 0o700);
+        }
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn load_state_accepts_legacy_json_without_new_fields() {
+        let home = temp_home_dir();
+        let state_dir = home.join(".ssl-toolbox");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        fs::write(
+            state_dir.join("state.json"),
+            r#"{
+  "recent_paths": {
+    "key": "/tmp/legacy/server.key"
+  },
+  "last_menu_choice": "pfx"
+}"#,
+        )
+        .expect("write legacy state");
+
+        let loaded = load_state_from(Some(home.clone()));
+        assert_eq!(loaded.recent_path("key"), Some("/tmp/legacy/server.key"));
+        assert_eq!(loaded.last_menu_choice, "pfx");
+        assert_eq!(loaded.workflow, WorkflowMemory::default());
+        assert!(loaded.recent_jobs.is_empty());
+
+        let _ = fs::remove_dir_all(home);
     }
 }

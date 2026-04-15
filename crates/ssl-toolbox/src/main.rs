@@ -2,6 +2,7 @@ mod display;
 mod settings;
 #[cfg(target_os = "windows")]
 mod win_certmgr;
+mod workflow;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -10,6 +11,11 @@ use dotenvy::dotenv;
 use std::path::{Path, PathBuf};
 
 use ssl_toolbox_core::{ConfigInputs, CsrDefaults};
+use workflow::{
+    ActionKind, ArtifactKind, JobRecord, PaletteEntry, WorkflowProfile, WorkspaceSnapshot,
+    apply_job_to_workflow, build_preview, builtin_profiles, next_steps, path_suggestions,
+    profile_by_id, push_recent_job, search_palette, suggest_output_path, validation_steps,
+};
 
 #[derive(Parser)]
 #[command(name = "ssl-toolbox", author, version, about = "SSL/TLS Security Toolbox", long_about = None)]
@@ -404,7 +410,7 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
         }
         Commands::NewConfig { out } => {
             let app_config = settings::load_config();
-            let inputs = prompt_config_inputs(&app_config.csr_defaults)?;
+            let inputs = prompt_config_inputs(&app_config.csr_defaults, None)?;
             let output_path = if let Some(o) = out {
                 o
             } else {
@@ -710,12 +716,38 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
     intro("SSL/TLS Security Toolbox")?;
 
     loop {
+        let workspace = current_workspace_snapshot();
+        merge_detected_workflow(
+            &mut app_config.ui_state.workflow,
+            &workspace.detect_workflow(),
+        );
         let menu = build_main_menu();
+        print_dashboard(&app_config.ui_state, &workspace);
         print_main_menu(&menu);
         let selection = prompt_main_menu_choice(&menu, &mut app_config.ui_state)?;
 
         match selection {
             -1 => continue,
+            -2 => {
+                replay_recent_job(&mut app_config.ui_state, debug, false)?;
+                continue;
+            }
+            -3 => {
+                replay_recent_job(&mut app_config.ui_state, debug, true)?;
+                continue;
+            }
+            -4 => {
+                print_recent_jobs(&app_config.ui_state);
+                continue;
+            }
+            -5 => {
+                print_workspace_overview(&workspace);
+                continue;
+            }
+            -6 => {
+                select_active_profile(&mut app_config.ui_state)?;
+                continue;
+            }
             0 => {
                 let conf = prompt_path(
                     &mut app_config.ui_state,
@@ -739,6 +771,14 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     non_empty(default_csr),
                 )?;
 
+                let job = build_generate_job(
+                    &conf,
+                    &key,
+                    &csr,
+                    app_config.ui_state.workflow.active_profile.as_deref(),
+                );
+                show_preview_and_confirm(&job)?;
+
                 let pass: String = password("Enter password for private key").interact()?;
                 ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
                 println!(
@@ -746,6 +786,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     display_path(&key),
                     display_path(&csr)
                 );
+                finalize_job(&mut app_config.ui_state, job);
             }
             1 => {
                 let key = prompt_path(
@@ -797,6 +838,26 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let pfx_pass: String = password("Enter password for PFX export").interact()?;
                 let chain_opt = chain.as_deref();
 
+                let mut job = JobRecord::new(
+                    if use_legacy {
+                        ActionKind::CreateLegacyPfx
+                    } else {
+                        ActionKind::CreatePfx
+                    },
+                    format!(
+                        "Create {} from {}",
+                        if use_legacy { "legacy PFX" } else { "PFX" },
+                        display_path(&cert)
+                    ),
+                )
+                .with_input("key", key.clone())
+                .with_input("cert", cert.clone())
+                .with_output(if use_legacy { "legacy_pfx" } else { "pfx" }, out.clone());
+                if let Some(chain) = &chain {
+                    job.inputs.insert("chain".to_string(), chain.clone());
+                }
+                show_preview_and_confirm(&job)?;
+
                 if use_legacy {
                     ssl_toolbox_core::pfx::create_pfx_legacy(
                         &key,
@@ -818,6 +879,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     )?;
                     println!("Success: PFX created at {}", display_path(&out));
                 }
+                finalize_job(&mut app_config.ui_state, job);
             }
             2 => {
                 let input_path = prompt_path(
@@ -834,6 +896,14 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     non_empty(default_out),
                 )?;
 
+                let job = JobRecord::new(
+                    ActionKind::CreateLegacyPfx,
+                    format!("Convert {} to legacy PFX", display_path(&input_path)),
+                )
+                .with_input("pfx", input_path.clone())
+                .with_output("legacy_pfx", out.clone());
+                show_preview_and_confirm(&job)?;
+
                 let input_pass: String = password("Enter password for input PFX").interact()?;
                 let output_pass: String = password("Enter password for output PFX").interact()?;
 
@@ -848,9 +918,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Success: Legacy PFX (TripleDES-SHA1) created at {}",
                     display_path(&out)
                 );
+                finalize_job(&mut app_config.ui_state, job);
             }
             3 => {
-                let inputs = prompt_config_inputs(&app_config.csr_defaults)?;
+                let inputs = prompt_config_inputs(
+                    &effective_csr_defaults(&app_config.ui_state, &app_config.csr_defaults),
+                    active_profile(&app_config.ui_state),
+                )?;
                 let default_path = format!("{}.cnf", inputs.common_name);
                 let output_path = prompt_path(
                     &mut app_config.ui_state,
@@ -859,16 +933,18 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     Some(default_path),
                 )?;
                 print_config_summary(&inputs, &output_path);
-                let confirmed: bool = confirm("Write this config file?").interact()?;
-                if confirmed {
-                    ssl_toolbox_core::config::generate_conf_from_inputs(&inputs, &output_path)?;
-                    println!(
-                        "Success: OpenSSL config written to {}",
-                        display_path(&output_path)
-                    );
-                } else {
-                    println!("Cancelled.");
-                }
+                let job = build_new_config_job(
+                    &output_path,
+                    app_config.ui_state.workflow.active_profile.as_deref(),
+                    Some(&inputs),
+                );
+                show_preview_and_confirm(&job)?;
+                ssl_toolbox_core::config::generate_conf_from_inputs(&inputs, &output_path)?;
+                println!(
+                    "Success: OpenSSL config written to {}",
+                    display_path(&output_path)
+                );
+                finalize_job(&mut app_config.ui_state, job);
             }
             4 => {
                 let input_path = prompt_path(
@@ -883,6 +959,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Path to output .conf file",
                     non_empty(derive_path(&input_path, "conf")),
                 )?;
+                let job = JobRecord::new(
+                    ActionKind::ConfigFromExisting,
+                    format!("Generate config from {}", display_path(&input_path)),
+                )
+                .with_input("source", input_path.clone())
+                .with_output("config", out.clone());
+                show_preview_and_confirm(&job)?;
                 let is_csr = input_path.ends_with(".csr");
                 ssl_toolbox_core::config::generate_conf_from_cert_or_csr(
                     &input_path,
@@ -890,6 +973,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     is_csr,
                 )?;
                 println!("Success: OpenSSL config written to {}", display_path(&out));
+                finalize_job(&mut app_config.ui_state, job);
             }
             5 => {
                 let input_path = prompt_path(
@@ -898,14 +982,25 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Path to certificate file (.crt, .cer, .pem)",
                     None,
                 )?;
-                match std::fs::read(&input_path) {
+                let success = match std::fs::read(&input_path) {
                     Ok(cert_content) => {
                         display::display_cert_chain(&cert_content, "Certificate Details");
+                        true
                     }
                     Err(e) => {
                         eprintln!("Error reading file: {}", e);
+                        false
                     }
-                }
+                };
+                finalize_job_if_success(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::ViewCert,
+                        format!("Inspect certificate {}", display_path(&input_path)),
+                    )
+                    .with_input("cert", input_path),
+                    success,
+                );
             }
             6 => {
                 let input_path = prompt_path(
@@ -917,7 +1012,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 println!("\n╔═══════════════════════════════════════════════════════════════╗");
                 println!("║                        CSR Details                           ║");
                 println!("╚═══════════════════════════════════════════════════════════════╝\n");
-                match ssl_toolbox_core::key_csr::extract_csr_details(&input_path) {
+                let success = match ssl_toolbox_core::key_csr::extract_csr_details(&input_path) {
                     Ok((cn, sans)) => {
                         println!("  CommonName: {}", cn);
                         if sans.is_empty() {
@@ -929,11 +1024,22 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                             }
                         }
                         println!();
+                        true
                     }
                     Err(e) => {
                         eprintln!("Error: Could not extract CSR details: {}", e);
+                        false
                     }
-                }
+                };
+                finalize_job_if_success(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::ViewCsr,
+                        format!("Inspect CSR {}", display_path(&input_path)),
+                    )
+                    .with_input("csr", input_path),
+                    success,
+                );
             }
             7 => {
                 let input_path = prompt_path(
@@ -943,21 +1049,33 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     None,
                 )?;
                 let pfx_pass: String = password("Enter PFX password").interact()?;
-                match std::fs::read(&input_path) {
+                let success = match std::fs::read(&input_path) {
                     Ok(pfx_bytes) => {
                         match ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass) {
                             Ok(cert_chain) => {
                                 display::display_cert_details_list(&cert_chain, "PFX Contents");
+                                true
                             }
                             Err(e) => {
                                 eprintln!("Error: {}", e);
+                                false
                             }
                         }
                     }
                     Err(e) => {
                         eprintln!("Error reading file: {}", e);
+                        false
                     }
-                }
+                };
+                finalize_job_if_success(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::ViewPfx,
+                        format!("Inspect PFX {}", display_path(&input_path)),
+                    )
+                    .with_input("pfx", input_path),
+                    success,
+                );
             }
             8 => {
                 let host: String = input("Hostname (e.g. example.com)").interact()?;
@@ -968,14 +1086,26 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .interact()?;
 
                 println!("\nConnecting to {}:{}...", host, port);
-                match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
+                let success = match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
                     Ok(result) => {
                         display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
+                        true
                     }
                     Err(e) => {
                         eprintln!("Error: {}", e);
+                        false
                     }
-                }
+                };
+                finalize_job_if_success(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::VerifyHttps,
+                        format!("Verify HTTPS endpoint {host}:{port}"),
+                    )
+                    .with_input("https_host", host)
+                    .with_input("port", port.to_string()),
+                    success,
+                );
             }
             9 => {
                 let host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
@@ -986,14 +1116,26 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .interact()?;
 
                 println!("\nConnecting to {}:{}...", host, port);
-                match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
+                let success = match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
                     Ok(result) => {
                         display::display_tls_check_result(&result, "LDAPS Endpoint Verification");
+                        true
                     }
                     Err(e) => {
                         eprintln!("Error: {}", e);
+                        false
                     }
-                }
+                };
+                finalize_job_if_success(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::VerifyLdaps,
+                        format!("Verify LDAPS endpoint {host}:{port}"),
+                    )
+                    .with_input("ldaps_host", host)
+                    .with_input("port", port.to_string()),
+                    success,
+                );
             }
             10 => {
                 let host: String = input("SMTP hostname (e.g. smtp.gmail.com)").interact()?;
@@ -1004,17 +1146,30 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .interact()?;
 
                 println!("\nConnecting to {}:{}...", host, port);
-                match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
-                    Ok(result) => {
-                        display::display_tls_check_result(
-                            &result,
-                            "SMTP STARTTLS Endpoint Verification",
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                    }
-                }
+                let success =
+                    match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
+                        Ok(result) => {
+                            display::display_tls_check_result(
+                                &result,
+                                "SMTP STARTTLS Endpoint Verification",
+                            );
+                            true
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            false
+                        }
+                    };
+                finalize_job_if_success(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::VerifySmtp,
+                        format!("Verify SMTP endpoint {host}:{port}"),
+                    )
+                    .with_input("smtp_host", host)
+                    .with_input("port", port.to_string()),
+                    success,
+                );
             }
             11 => {
                 let format: String = select("Target format")
@@ -1036,16 +1191,21 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     &mut app_config.ui_state,
                     "convert.output",
                     "Path to output file",
-                    non_empty(derive_path(
-                        &input_path,
-                        match format.as_str() {
-                            "der" => "der",
-                            "pem" => "pem",
-                            "base64" => "b64",
-                            _ => unreachable!(),
-                        },
-                    )),
+                    convert_output_suggestion(&input_path, &format),
                 )?;
+
+                let job = JobRecord::new(
+                    ActionKind::Convert,
+                    format!(
+                        "Convert {} to {}",
+                        display_path(&input_path),
+                        format.to_uppercase()
+                    ),
+                )
+                .with_input("input", input_path.clone())
+                .with_output("output", output_path.clone())
+                .with_replay_data("format", format.clone());
+                show_preview_and_confirm(&job)?;
 
                 match format.as_str() {
                     "der" => {
@@ -1065,6 +1225,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     }
                     _ => unreachable!(),
                 }
+                finalize_job(&mut app_config.ui_state, job);
             }
             12 => {
                 let input_path = prompt_path(
@@ -1078,6 +1239,14 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let desc = ssl_toolbox_core::convert::format_description(format);
                 println!("\nFile: {}", display_path(&input_path));
                 println!("Format: {}", desc);
+                finalize_job(
+                    &mut app_config.ui_state,
+                    JobRecord::new(
+                        ActionKind::Identify,
+                        format!("Identify artifact {}", display_path(&input_path)),
+                    )
+                    .with_input("input", input_path),
+                );
             }
             #[cfg(feature = "sectigo")]
             13 => {
@@ -1097,6 +1266,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Path to output signed .crt file",
                     non_empty(default_crt),
                 )?;
+
+                let job = build_ca_submit_job(
+                    &csr,
+                    &out,
+                    app_config.ui_state.workflow.active_profile.as_deref(),
+                );
 
                 let description: String = input("Optional enrollment description (comments)")
                     .required(false)
@@ -1162,6 +1337,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     product_code: selected_code,
                     term_days: None,
                 };
+                show_preview_and_confirm(&job)?;
 
                 let request_id = plugin.submit_csr(&csr_content, &options, debug)?;
 
@@ -1180,6 +1356,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Downloaded Certificate Details",
                 );
                 println!("Success: Certificate saved to {}", display_path(&out));
+                finalize_job(&mut app_config.ui_state, job);
             }
             #[cfg(feature = "sectigo")]
             14 => {
@@ -1232,7 +1409,10 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
     Ok(())
 }
 
-fn prompt_config_inputs(defaults: &CsrDefaults) -> Result<ConfigInputs> {
+fn prompt_config_inputs(
+    defaults: &CsrDefaults,
+    profile: Option<WorkflowProfile>,
+) -> Result<ConfigInputs> {
     let common_name: String = input("Common Name").interact()?;
 
     let country: String = if defaults.country.is_empty() {
@@ -1308,28 +1488,76 @@ fn prompt_config_inputs(defaults: &CsrDefaults) -> Result<ConfigInputs> {
         san_ips.push(ip);
     }
 
-    let key_size: u32 = select("Key size")
-        .item(2048, "2048", "Default — widely compatible")
-        .item(4096, "4096", "Stronger but slower")
-        .interact()?;
+    let preferred_key_size = profile.as_ref().map(|item| item.key_size).unwrap_or(2048);
+    let key_size: u32 = if preferred_key_size == 4096 {
+        select("Key size")
+            .item(4096, "4096", "Profile default — stronger but slower")
+            .item(2048, "2048", "More widely compatible")
+            .interact()?
+    } else {
+        select("Key size")
+            .item(2048, "2048", "Default — widely compatible")
+            .item(4096, "4096", "Stronger but slower")
+            .interact()?
+    };
 
-    let extended_key_usage: String = select("Extended Key Usage")
-        .item(
-            "serverAuth".to_string(),
-            "Server Auth",
-            "TLS server certificates (default)",
-        )
-        .item(
-            "clientAuth".to_string(),
-            "Client Auth",
-            "TLS client certificates",
-        )
-        .item(
-            "serverAuth, clientAuth".to_string(),
-            "Both (mTLS)",
-            "Mutual TLS — server and client auth",
-        )
-        .interact()?;
+    let preferred_eku = profile
+        .as_ref()
+        .map(|item| item.extended_key_usage)
+        .unwrap_or("serverAuth");
+    let extended_key_usage: String = match preferred_eku {
+        "clientAuth" => select("Extended Key Usage")
+            .item(
+                "clientAuth".to_string(),
+                "Client Auth",
+                "Profile default — TLS client certificates",
+            )
+            .item(
+                "serverAuth".to_string(),
+                "Server Auth",
+                "TLS server certificates",
+            )
+            .item(
+                "serverAuth, clientAuth".to_string(),
+                "Both (mTLS)",
+                "Mutual TLS — server and client auth",
+            )
+            .interact()?,
+        "serverAuth, clientAuth" => select("Extended Key Usage")
+            .item(
+                "serverAuth, clientAuth".to_string(),
+                "Both (mTLS)",
+                "Profile default — server and client auth",
+            )
+            .item(
+                "serverAuth".to_string(),
+                "Server Auth",
+                "TLS server certificates",
+            )
+            .item(
+                "clientAuth".to_string(),
+                "Client Auth",
+                "TLS client certificates",
+            )
+            .interact()?,
+        _ => select("Extended Key Usage")
+            .item(
+                "serverAuth".to_string(),
+                "Server Auth",
+                "Profile/default — TLS server certificates",
+            )
+            .item(
+                "clientAuth".to_string(),
+                "Client Auth",
+                "TLS client certificates",
+            )
+            .item(
+                "serverAuth, clientAuth".to_string(),
+                "Both (mTLS)",
+                "Mutual TLS — server and client auth",
+            )
+            .interact()?,
+    };
 
     Ok(ConfigInputs {
         common_name,
@@ -1371,6 +1599,132 @@ fn print_config_summary(inputs: &ConfigInputs, output_path: &str) {
     println!();
 }
 
+fn build_new_config_job(
+    output_path: &str,
+    profile: Option<&str>,
+    inputs: Option<&ConfigInputs>,
+) -> JobRecord {
+    let mut job = JobRecord::new(
+        ActionKind::NewConfig,
+        format!("Generate config {}", display_path(output_path)),
+    )
+    .with_output("config", output_path.to_string());
+    if let Some(profile) = profile {
+        job.profile = Some(profile.to_string());
+    }
+    if let Some(inputs) = inputs {
+        job = job
+            .with_replay_data("common_name", inputs.common_name.clone())
+            .with_replay_data("country", inputs.country.clone())
+            .with_replay_data("state", inputs.state.clone())
+            .with_replay_data("locality", inputs.locality.clone())
+            .with_replay_data("organization", inputs.organization.clone())
+            .with_replay_data("org_unit", inputs.org_unit.clone())
+            .with_replay_data("email", inputs.email.clone())
+            .with_replay_data(
+                "san_dns",
+                serde_json::to_string(&inputs.san_dns).unwrap_or_else(|_| "[]".to_string()),
+            )
+            .with_replay_data(
+                "san_ips",
+                serde_json::to_string(&inputs.san_ips).unwrap_or_else(|_| "[]".to_string()),
+            )
+            .with_replay_data("key_size", inputs.key_size.to_string())
+            .with_replay_data("extended_key_usage", inputs.extended_key_usage.clone());
+    }
+    job
+}
+
+fn build_generate_job(conf: &str, key: &str, csr: &str, profile: Option<&str>) -> JobRecord {
+    let mut job = JobRecord::new(
+        ActionKind::Generate,
+        format!("Generate key and CSR from {}", display_path(conf)),
+    )
+    .with_input("config", conf.to_string())
+    .with_output("key", key.to_string())
+    .with_output("csr", csr.to_string());
+    if let Some(profile) = profile {
+        job.profile = Some(profile.to_string());
+    }
+    job
+}
+
+fn build_ca_submit_job(csr: &str, out: &str, profile: Option<&str>) -> JobRecord {
+    let mut job = JobRecord::new(
+        ActionKind::CaSubmit,
+        format!("Submit CSR {}", display_path(csr)),
+    )
+    .with_input("csr", csr.to_string())
+    .with_output("cert", out.to_string());
+    if let Some(profile) = profile {
+        job.profile = Some(profile.to_string());
+    }
+    job
+}
+
+fn stored_new_config_inputs(job: &JobRecord) -> Option<ConfigInputs> {
+    let read = |key: &str| job.replay_data.get(key).cloned();
+    Some(ConfigInputs {
+        common_name: read("common_name")?,
+        country: read("country")?,
+        state: read("state")?,
+        locality: read("locality")?,
+        organization: read("organization")?,
+        org_unit: read("org_unit")?,
+        email: read("email")?,
+        san_dns: serde_json::from_str(&read("san_dns")?).ok()?,
+        san_ips: serde_json::from_str(&read("san_ips")?).ok()?,
+        key_size: read("key_size")?.parse().ok()?,
+        extended_key_usage: read("extended_key_usage")?,
+    })
+}
+
+enum NewConfigReplaySource {
+    Stored(ConfigInputs),
+    Prompt,
+}
+
+fn new_config_replay_source(job: &JobRecord) -> NewConfigReplaySource {
+    stored_new_config_inputs(job)
+        .map(NewConfigReplaySource::Stored)
+        .unwrap_or(NewConfigReplaySource::Prompt)
+}
+
+fn build_replay_pfx_job(
+    kind: ActionKind,
+    key: &str,
+    cert: &str,
+    chain: Option<&str>,
+    out_key: &str,
+    out: &str,
+) -> JobRecord {
+    let mut job = JobRecord::new(
+        kind,
+        format!(
+            "Repeat {} from {}",
+            if matches!(kind, ActionKind::CreateLegacyPfx) {
+                "legacy PFX"
+            } else {
+                "PFX"
+            },
+            display_path(cert)
+        ),
+    )
+    .with_input("key", key.to_string())
+    .with_input("cert", cert.to_string())
+    .with_output(out_key, out.to_string());
+    if let Some(chain) = chain {
+        job.inputs.insert("chain".to_string(), chain.to_string());
+    }
+    job
+}
+
+fn finalize_job_if_success(state: &mut settings::UiState, job: JobRecord, success: bool) {
+    if success {
+        finalize_job(state, job);
+    }
+}
+
 fn derive_path(base_path: &str, new_ext: &str) -> String {
     let path = Path::new(base_path);
     if let Some(stem) = path.file_stem() {
@@ -1381,133 +1735,142 @@ fn derive_path(base_path: &str, new_ext: &str) -> String {
     String::new()
 }
 
-#[derive(Clone, Copy)]
-struct MenuItem {
-    action: i32,
-    alias: &'static str,
-    title: &'static str,
-    description: &'static str,
-}
-
-fn build_main_menu() -> Vec<MenuItem> {
+fn build_main_menu() -> Vec<PaletteEntry> {
     let mut items = vec![
-        MenuItem {
+        PaletteEntry {
             action: 0,
             alias: "g",
             title: "Generate Key and CSR",
             description: "Build a new key and CSR from a config file",
+            keywords: &["generate", "csr", "key"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 1,
             alias: "pfx",
             title: "Create PFX",
             description: "Combine key and cert into a PFX file",
+            keywords: &["pkcs12", "bundle", "export"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 2,
             alias: "legacy",
             title: "Create Legacy PFX",
             description: "Convert existing PFX to TripleDES-SHA1 format",
+            keywords: &["legacy", "3des", "pkcs12"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 3,
             alias: "new",
             title: "Generate New OpenSSL Config",
             description: "Build a .cnf file from scratch via prompts",
+            keywords: &["config", "openssl", "profile"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 4,
             alias: "config",
             title: "Generate Config from Cert/CSR",
             description: "Create a .cnf file from existing data",
+            keywords: &["config", "csr", "certificate"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 5,
             alias: "cert",
             title: "View Certificate Details",
             description: "Display details of an existing certificate",
+            keywords: &["inspect", "certificate", "x509"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 6,
             alias: "csr",
             title: "View CSR Details",
             description: "Display details of an existing CSR",
+            keywords: &["inspect", "csr"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 7,
             alias: "vpfx",
             title: "View PFX Contents",
             description: "Display certs and chain inside a PFX/PKCS12 file",
+            keywords: &["inspect", "pfx", "pkcs12"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 8,
             alias: "https",
             title: "Verify HTTPS Endpoint",
             description: "Check TLS cert and protocol for an HTTPS server",
+            keywords: &["verify", "tls", "https"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 9,
             alias: "ldaps",
             title: "Verify LDAPS Endpoint",
             description: "Check TLS cert and protocol for an LDAPS server",
+            keywords: &["verify", "tls", "ldap"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 10,
             alias: "smtp",
             title: "Verify SMTP Endpoint",
             description: "Check TLS cert via SMTP STARTTLS",
+            keywords: &["verify", "tls", "mail"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 11,
             alias: "convert",
             title: "Convert Certificate Format",
             description: "Convert between PEM, DER, and Base64",
+            keywords: &["convert", "pem", "der", "base64"],
         },
-        MenuItem {
+        PaletteEntry {
             action: 12,
             alias: "id",
             title: "Identify Certificate Format",
             description: "Auto-detect a certificate file's format",
+            keywords: &["identify", "detect", "format"],
         },
     ];
 
     #[cfg(feature = "sectigo")]
     {
-        items.push(MenuItem {
+        items.push(PaletteEntry {
             action: 13,
             alias: "submit",
             title: "CA: Submit CSR",
             description: "Submit CSR to CA for signing",
+            keywords: &["ca", "submit", "sectigo"],
         });
-        items.push(MenuItem {
+        items.push(PaletteEntry {
             action: 14,
             alias: "profiles",
             title: "CA: List Profiles",
             description: "View available SSL certificate types",
+            keywords: &["ca", "profiles", "sectigo"],
         });
     }
 
     #[cfg(target_os = "windows")]
     {
-        items.push(MenuItem {
+        items.push(PaletteEntry {
             action: 20,
             alias: "win",
             title: "Windows Certificate Manager",
             description: "Browse and manage Windows certificate stores",
+            keywords: &["windows", "certmgr", "store"],
         });
     }
 
-    items.push(MenuItem {
+    items.push(PaletteEntry {
         action: 99,
         alias: "q",
         title: "Exit",
         description: "Close the application",
+        keywords: &["quit", "exit"],
     });
 
     items
 }
 
-fn print_main_menu(items: &[MenuItem]) {
+fn print_main_menu(items: &[PaletteEntry]) {
     println!();
     println!("Quick Menu");
     for (index, item) in items.iter().enumerate() {
@@ -1520,9 +1883,12 @@ fn print_main_menu(items: &[MenuItem]) {
         println!("      {}", item.description);
     }
     println!();
+    println!(
+        "Commands: `/query` palette  `.` repeat last  `,` clone last  `h` history  `w` workspace  `p` profile"
+    );
 }
 
-fn prompt_main_menu_choice(items: &[MenuItem], state: &mut settings::UiState) -> Result<i32> {
+fn prompt_main_menu_choice(items: &[PaletteEntry], state: &mut settings::UiState) -> Result<i32> {
     let default_choice = if state.last_menu_choice.is_empty() {
         items.first().map(|item| item.alias).unwrap_or("q")
     } else {
@@ -1533,6 +1899,43 @@ fn prompt_main_menu_choice(items: &[MenuItem], state: &mut settings::UiState) ->
         .default_input(default_choice)
         .interact()?;
     let choice = raw.trim().to_ascii_lowercase();
+
+    if choice.starts_with('/') {
+        let matches = search_palette(choice.trim_start_matches('/'), items);
+        if matches.is_empty() {
+            eprintln!("No command palette matches for '{}'.", raw);
+            return Ok(-1);
+        }
+        if matches.len() == 1 {
+            state.remember_menu_choice(&matches[0].alias);
+            persist_ui_state(state);
+            return Ok(matches[0].action);
+        }
+
+        let mut picker = select("Command Palette");
+        for item in matches.iter().take(8) {
+            picker = picker.item(
+                item.action,
+                format!("{} [{}]", item.title, item.alias),
+                item.description.clone(),
+            );
+        }
+        let selection = picker.interact()?;
+        if let Some(entry) = items.iter().find(|entry| entry.action == selection) {
+            state.remember_menu_choice(entry.alias);
+            persist_ui_state(state);
+        }
+        return Ok(selection);
+    }
+
+    match choice.as_str() {
+        "." | "repeat" => return Ok(-2),
+        "," | "clone" => return Ok(-3),
+        "h" | "history" | "recent" => return Ok(-4),
+        "w" | "workspace" | "files" => return Ok(-5),
+        "p" | "profile" => return Ok(-6),
+        _ => {}
+    }
 
     if let Ok(number) = choice.parse::<usize>()
         && number > 0
@@ -1584,26 +1987,86 @@ fn prompt_path_inner(
     suggested: Option<String>,
     required: bool,
 ) -> Result<Option<String>> {
-    let default_value = suggested.or_else(|| state.recent_path(key).map(ToOwned::to_owned));
+    let workspace = current_workspace_snapshot();
+    let preferred_kind = preferred_artifact_kind_for_key(key);
+    let detected_workflow = workspace.detect_workflow();
+    let default_value = suggested
+        .or_else(|| state.recent_path(key).map(ToOwned::to_owned))
+        .or_else(|| preferred_kind.and_then(|kind| state.workflow.get(kind).map(ToOwned::to_owned)))
+        .or_else(|| {
+            preferred_kind.and_then(|kind| detected_workflow.get(kind).map(ToOwned::to_owned))
+        });
     let default_display = default_value.as_ref().map(|value| display_path(value));
+    let suggestions = path_suggestions(
+        "",
+        preferred_kind,
+        &state.recent_paths,
+        &state.workflow,
+        &workspace,
+    );
 
-    let mut builder = input(label);
-    if let Some(default_display) = default_display.as_deref() {
-        builder = builder.default_input(default_display);
-    }
-    if !required {
-        builder = builder.required(false);
-    }
-
-    let raw: String = builder.interact()?;
-    if raw.trim().is_empty() {
-        return Ok(None);
+    if !suggestions.is_empty() {
+        println!("Suggestions:");
+        for (index, suggestion) in suggestions.iter().take(5).enumerate() {
+            println!("  {}. {}", index + 1, display_path(&suggestion.path));
+        }
+        println!("Use a number, `?` for picker, a partial path for completion, or type a path.");
     }
 
-    let resolved = resolve_path(&raw);
-    state.remember_path(key, &resolved);
-    persist_ui_state(state);
-    Ok(Some(resolved))
+    loop {
+        let mut builder = input(label);
+        if let Some(default_display) = default_display.as_deref() {
+            builder = builder.default_input(default_display);
+        }
+        if !required {
+            builder = builder.required(false);
+        }
+
+        let raw: String = builder.interact()?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        if trimmed == "?" && !suggestions.is_empty() {
+            let mut picker = select(label);
+            for suggestion in suggestions.iter().take(12) {
+                let display = display_path(&suggestion.path);
+                picker = picker.item(suggestion.path.clone(), display, suggestion.path.clone());
+            }
+            let picked = picker.interact()?;
+            state.remember_path(key, &picked);
+            persist_ui_state(state);
+            return Ok(Some(picked));
+        }
+
+        if let Ok(number) = trimmed.parse::<usize>()
+            && number > 0
+            && let Some(suggestion) = suggestions.get(number - 1)
+        {
+            state.remember_path(key, &suggestion.path);
+            persist_ui_state(state);
+            return Ok(Some(suggestion.path.clone()));
+        }
+
+        let filtered = path_suggestions(
+            trimmed,
+            preferred_kind,
+            &state.recent_paths,
+            &state.workflow,
+            &workspace,
+        );
+        if let Some(completed) = workflow::complete_path(trimmed, &filtered) {
+            state.remember_path(key, &completed);
+            persist_ui_state(state);
+            return Ok(Some(completed));
+        }
+
+        let resolved = resolve_path(&raw);
+        state.remember_path(key, &resolved);
+        persist_ui_state(state);
+        return Ok(Some(resolved));
+    }
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -1623,5 +2086,906 @@ fn display_path(path: &str) -> String {
 fn persist_ui_state(state: &settings::UiState) {
     if let Err(error) = settings::save_state(state) {
         eprintln!("Warning: could not save breadcrumb state: {}", error);
+    }
+}
+
+fn current_workspace_snapshot() -> WorkspaceSnapshot {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    WorkspaceSnapshot::scan(&cwd)
+}
+
+fn preferred_artifact_kind_for_key(key: &str) -> Option<ArtifactKind> {
+    if key.contains("config") || key.contains(".conf") || key.contains(".cnf") {
+        Some(ArtifactKind::Config)
+    } else if key.contains("key") {
+        Some(ArtifactKind::Key)
+    } else if key.contains("csr") {
+        Some(ArtifactKind::Csr)
+    } else if key.contains("chain") {
+        Some(ArtifactKind::Chain)
+    } else if key.contains("legacy") {
+        Some(ArtifactKind::LegacyPfx)
+    } else if key.contains("pfx") {
+        Some(ArtifactKind::Pfx)
+    } else if key.contains("cert") || key.contains("crt") {
+        Some(ArtifactKind::Cert)
+    } else {
+        None
+    }
+}
+
+fn print_dashboard(state: &settings::UiState, workspace: &WorkspaceSnapshot) {
+    println!();
+    println!("Workspace: {}", workspace.root.display());
+    if let Some(profile) = &state.workflow.active_profile {
+        println!("Active Profile: {}", profile);
+    }
+    let artifact_summary = state
+        .workflow
+        .artifact_pairs()
+        .into_iter()
+        .map(|(kind, path)| format!("{}={}", kind.key(), display_path(&path)))
+        .collect::<Vec<_>>();
+    if !artifact_summary.is_empty() {
+        println!("Workflow: {}", artifact_summary.join("  "));
+    }
+    if let Some(job) = state.recent_jobs.first() {
+        println!("Last Job: {}", job.summary);
+    }
+    let top_files = workspace.top_files(5);
+    if !top_files.is_empty() {
+        println!(
+            "Workspace Files: {}",
+            top_files
+                .into_iter()
+                .map(|path| display_path(&path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+}
+
+fn print_workspace_overview(workspace: &WorkspaceSnapshot) {
+    println!();
+    println!("Workspace Files");
+    if workspace.files.is_empty() {
+        println!("  No likely certificate artifacts detected.");
+        return;
+    }
+    for file in &workspace.files {
+        println!("  {:<10} {}", file.kind.display(), file.path.display());
+    }
+}
+
+fn print_recent_jobs(state: &settings::UiState) {
+    println!();
+    println!("Recent Jobs");
+    if state.recent_jobs.is_empty() {
+        println!("  No recorded jobs yet.");
+        return;
+    }
+    for (index, job) in state.recent_jobs.iter().take(10).enumerate() {
+        println!("  {}. {} [{}]", index + 1, job.summary, job.kind.alias());
+    }
+    println!("Use `.` to repeat the latest job or `,` to clone it with edits.");
+}
+
+fn select_active_profile(state: &mut settings::UiState) -> Result<()> {
+    let mut picker = select("Choose an active workflow profile").item(
+        "__none__".to_string(),
+        "No Profile",
+        "Use only saved org defaults",
+    );
+    for profile in builtin_profiles() {
+        picker = picker.item(
+            profile.id.to_string(),
+            profile.name,
+            profile.description.to_string(),
+        );
+    }
+
+    let selection = picker.interact()?;
+    state.workflow.active_profile = if selection == "__none__" {
+        None
+    } else {
+        Some(selection)
+    };
+    persist_ui_state(state);
+    Ok(())
+}
+
+fn effective_csr_defaults(state: &settings::UiState, base: &CsrDefaults) -> CsrDefaults {
+    let mut defaults = base.clone();
+    if let Some(profile_id) = &state.workflow.active_profile
+        && let Some(profile) = profile_by_id(profile_id)
+    {
+        merge_profile_defaults(&mut defaults, &profile);
+    }
+    defaults
+}
+
+fn active_profile(state: &settings::UiState) -> Option<WorkflowProfile> {
+    state
+        .workflow
+        .active_profile
+        .as_deref()
+        .and_then(profile_by_id)
+}
+
+fn merge_profile_defaults(target: &mut CsrDefaults, profile: &WorkflowProfile) {
+    if !profile.csr_defaults.country.is_empty() {
+        target.country = profile.csr_defaults.country.clone();
+    }
+    if !profile.csr_defaults.state.is_empty() {
+        target.state = profile.csr_defaults.state.clone();
+    }
+    if !profile.csr_defaults.locality.is_empty() {
+        target.locality = profile.csr_defaults.locality.clone();
+    }
+    if !profile.csr_defaults.organization.is_empty() {
+        target.organization = profile.csr_defaults.organization.clone();
+    }
+    if !profile.csr_defaults.org_unit.is_empty() {
+        target.org_unit = profile.csr_defaults.org_unit.clone();
+    }
+    if !profile.csr_defaults.email.is_empty() {
+        target.email = profile.csr_defaults.email.clone();
+    }
+}
+
+fn merge_detected_workflow(
+    target: &mut workflow::WorkflowMemory,
+    detected: &workflow::WorkflowMemory,
+) {
+    for (kind, value) in detected.artifact_pairs() {
+        if target.get(kind).is_none() {
+            target.set(kind, value);
+        }
+    }
+}
+
+fn show_preview_and_confirm(job: &JobRecord) -> Result<()> {
+    let preview = build_preview(job);
+    if preview.lines.is_empty() {
+        return Ok(());
+    }
+
+    println!();
+    println!("Planned Action: {}", preview.title);
+    for (label, value) in preview.lines {
+        println!("  {:<16} {}", label, display_path(&value));
+    }
+    let confirmed = confirm("Proceed with this action?")
+        .initial_value(true)
+        .interact()?;
+    if confirmed {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Action cancelled"))
+    }
+}
+
+fn convert_output_suggestion(input_path: &str, format: &str) -> Option<String> {
+    match format {
+        "der" => non_empty(derive_path(input_path, "der")),
+        "pem" => non_empty(derive_path(input_path, "pem")),
+        "base64" => non_empty(derive_path(input_path, "b64")),
+        _ => suggest_output_path(input_path, ArtifactKind::Cert),
+    }
+}
+
+fn convert_format_for_replay(job: &JobRecord, output_path: &str) -> String {
+    job.replay_data.get("format").cloned().unwrap_or_else(|| {
+        if output_path.ends_with(".der") {
+            "der".to_string()
+        } else if output_path.ends_with(".pem") {
+            "pem".to_string()
+        } else {
+            "base64".to_string()
+        }
+    })
+}
+
+fn finalize_job(state: &mut settings::UiState, job: JobRecord) {
+    apply_job_to_workflow(&mut state.workflow, &job);
+    push_recent_job(&mut state.recent_jobs, job.clone());
+    persist_ui_state(state);
+    print_validation_plan(&job);
+    print_next_steps(&job, &state.workflow);
+}
+
+fn print_validation_plan(job: &JobRecord) {
+    let steps = validation_steps(job);
+    if steps.is_empty() {
+        return;
+    }
+
+    println!("Validation:");
+    for step in steps {
+        println!("  - {}: {}", step.label, step.command);
+    }
+}
+
+fn print_next_steps(job: &JobRecord, memory: &workflow::WorkflowMemory) {
+    let steps = next_steps(job, memory);
+    if steps.is_empty() {
+        return;
+    }
+
+    println!("Next Steps:");
+    for step in steps {
+        println!("  - {}", step);
+    }
+}
+
+fn replay_recent_job(state: &mut settings::UiState, debug: bool, clone: bool) -> Result<()> {
+    let Some(job) = state.recent_jobs.first().cloned() else {
+        eprintln!("No recent jobs to replay.");
+        return Ok(());
+    };
+
+    match job.kind {
+        ActionKind::Generate => replay_generate(state, &job, clone),
+        ActionKind::CreatePfx => replay_pfx(state, &job, clone, false),
+        ActionKind::CreateLegacyPfx => replay_pfx(state, &job, clone, true),
+        ActionKind::NewConfig => replay_new_config(state, &job, clone),
+        ActionKind::ConfigFromExisting => replay_config_from_existing(state, &job, clone),
+        ActionKind::ViewCert => replay_view_cert(state, &job, clone),
+        ActionKind::ViewCsr => replay_view_csr(state, &job, clone),
+        ActionKind::ViewPfx => replay_view_pfx(state, &job, clone),
+        ActionKind::VerifyHttps => replay_verify_https(state, &job, clone),
+        ActionKind::VerifyLdaps => replay_verify_ldaps(state, &job, clone),
+        ActionKind::VerifySmtp => replay_verify_smtp(state, &job, clone),
+        ActionKind::Convert => replay_convert(state, &job, clone),
+        ActionKind::Identify => replay_identify(state, &job, clone),
+        #[cfg(feature = "sectigo")]
+        ActionKind::CaSubmit => replay_ca_submit(state, &job, clone, debug),
+        ActionKind::CaProfiles => {
+            eprintln!("The CA profile listing action does not have a replay path.");
+            Ok(())
+        }
+        #[cfg(not(feature = "sectigo"))]
+        ActionKind::CaSubmit => {
+            let _ = debug;
+            eprintln!("The CA submit action is unavailable in this build.");
+            Ok(())
+        }
+    }
+}
+
+fn seeded_value(job: &JobRecord, key: &str) -> Option<String> {
+    job.inputs
+        .get(key)
+        .or_else(|| job.outputs.get(key))
+        .cloned()
+}
+
+fn replay_generate(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let conf = if clone {
+        prompt_path(
+            state,
+            "generate.conf",
+            "Path to openssl.conf",
+            seeded_value(job, "config"),
+        )?
+    } else {
+        seeded_value(job, "config").ok_or_else(|| anyhow::anyhow!("Missing config path"))?
+    };
+    let key = if clone {
+        prompt_path(
+            state,
+            "generate.key",
+            "Path to output .key file",
+            seeded_value(job, "key"),
+        )?
+    } else {
+        seeded_value(job, "key").ok_or_else(|| anyhow::anyhow!("Missing key path"))?
+    };
+    let csr = if clone {
+        prompt_path(
+            state,
+            "generate.csr",
+            "Path to output .csr file",
+            seeded_value(job, "csr"),
+        )?
+    } else {
+        seeded_value(job, "csr").ok_or_else(|| anyhow::anyhow!("Missing csr path"))?
+    };
+
+    let replay_job = build_generate_job(&conf, &key, &csr, job.profile.as_deref());
+    show_preview_and_confirm(&replay_job)?;
+    let pass: String = password("Enter password for private key").interact()?;
+    ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
+    println!(
+        "Success: Generated {} and {}",
+        display_path(&key),
+        display_path(&csr)
+    );
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+fn replay_pfx(
+    state: &mut settings::UiState,
+    job: &JobRecord,
+    clone: bool,
+    legacy: bool,
+) -> Result<()> {
+    let key = if legacy && job.inputs.contains_key("pfx") && !clone {
+        seeded_value(job, "pfx").ok_or_else(|| anyhow::anyhow!("Missing input PFX"))?
+    } else if clone {
+        prompt_path(
+            state,
+            if legacy {
+                "pfx_legacy.input"
+            } else {
+                "pfx.key"
+            },
+            if legacy {
+                "Path to existing PFX file"
+            } else {
+                "Path to .key file"
+            },
+            seeded_value(job, if legacy { "pfx" } else { "key" }),
+        )?
+    } else {
+        seeded_value(job, if legacy { "pfx" } else { "key" })
+            .ok_or_else(|| anyhow::anyhow!("Missing replay input"))?
+    };
+
+    if legacy && job.inputs.contains_key("pfx") {
+        let out = if clone {
+            prompt_path(
+                state,
+                "pfx_legacy.output",
+                "Path to output legacy PFX file",
+                seeded_value(job, "legacy_pfx"),
+            )?
+        } else {
+            seeded_value(job, "legacy_pfx")
+                .ok_or_else(|| anyhow::anyhow!("Missing legacy output"))?
+        };
+        let replay_job = JobRecord::new(
+            ActionKind::CreateLegacyPfx,
+            format!("Repeat legacy conversion {}", display_path(&key)),
+        )
+        .with_input("pfx", key.clone())
+        .with_output("legacy_pfx", out.clone());
+        show_preview_and_confirm(&replay_job)?;
+        let input_pass: String = password("Enter password for input PFX").interact()?;
+        let output_pass: String = password("Enter password for output PFX").interact()?;
+        let pfx_bytes = std::fs::read(&key)?;
+        ssl_toolbox_core::pfx::create_pfx_legacy_3des(&pfx_bytes, &input_pass, &out, &output_pass)?;
+        println!(
+            "Success: Legacy PFX (TripleDES-SHA1) created at {}",
+            display_path(&out)
+        );
+        finalize_job(state, replay_job);
+        return Ok(());
+    }
+
+    let cert = if clone {
+        prompt_path(
+            state,
+            "pfx.cert",
+            "Path to signed .crt file",
+            seeded_value(job, "cert"),
+        )?
+    } else {
+        seeded_value(job, "cert").ok_or_else(|| anyhow::anyhow!("Missing cert path"))?
+    };
+    let chain = if clone {
+        prompt_optional_path(
+            state,
+            "pfx.chain",
+            "Path to chain file (optional)",
+            seeded_value(job, "chain"),
+        )?
+    } else {
+        seeded_value(job, "chain")
+    };
+    let out_key = if legacy { "legacy_pfx" } else { "pfx" };
+    let out = if clone {
+        prompt_path(
+            state,
+            "pfx.output",
+            "Path to output .pfx file",
+            seeded_value(job, out_key),
+        )?
+    } else {
+        seeded_value(job, out_key).ok_or_else(|| anyhow::anyhow!("Missing PFX output"))?
+    };
+    let replay_job = build_replay_pfx_job(
+        if legacy {
+            ActionKind::CreateLegacyPfx
+        } else {
+            ActionKind::CreatePfx
+        },
+        &key,
+        &cert,
+        chain.as_deref(),
+        out_key,
+        &out,
+    );
+    show_preview_and_confirm(&replay_job)?;
+    let key_pass: String =
+        password("Enter password for private key (or press Enter if not encrypted)")
+            .allow_empty()
+            .interact()?;
+    let key_pass_opt = if key_pass.is_empty() {
+        None
+    } else {
+        Some(key_pass.as_str())
+    };
+    let pfx_pass: String = password("Enter password for PFX export").interact()?;
+    if legacy {
+        ssl_toolbox_core::pfx::create_pfx_legacy(
+            &key,
+            &cert,
+            chain.as_deref(),
+            &out,
+            key_pass_opt,
+            &pfx_pass,
+        )?;
+    } else {
+        ssl_toolbox_core::pfx::create_pfx(
+            &key,
+            &cert,
+            chain.as_deref(),
+            &out,
+            key_pass_opt,
+            &pfx_pass,
+        )?;
+    }
+    println!(
+        "Success: {} created at {}",
+        if legacy { "Legacy PFX" } else { "PFX" },
+        display_path(&out)
+    );
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+fn replay_new_config(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let out = if clone {
+        prompt_path(
+            state,
+            "new_config.output",
+            "Output .cnf file path",
+            seeded_value(job, "config"),
+        )?
+    } else {
+        seeded_value(job, "config").ok_or_else(|| anyhow::anyhow!("Missing config output"))?
+    };
+    let inputs = match new_config_replay_source(job) {
+        NewConfigReplaySource::Stored(inputs) => inputs,
+        NewConfigReplaySource::Prompt => {
+            let mut defaults = CsrDefaults::default();
+            let replay_profile = job
+                .profile
+                .as_deref()
+                .and_then(profile_by_id)
+                .or_else(|| active_profile(state));
+            if let Some(profile) = replay_profile.clone() {
+                merge_profile_defaults(&mut defaults, &profile);
+            }
+            prompt_config_inputs(&defaults, replay_profile)?
+        }
+    };
+    let replay_job = build_new_config_job(&out, job.profile.as_deref(), Some(&inputs));
+    show_preview_and_confirm(&replay_job)?;
+    ssl_toolbox_core::config::generate_conf_from_inputs(&inputs, &out)?;
+    println!("Success: OpenSSL config written to {}", display_path(&out));
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+fn replay_config_from_existing(
+    state: &mut settings::UiState,
+    job: &JobRecord,
+    clone: bool,
+) -> Result<()> {
+    let source = if clone {
+        prompt_path(
+            state,
+            "config_from_existing.input",
+            "Path to existing .cer or .csr",
+            seeded_value(job, "source"),
+        )?
+    } else {
+        seeded_value(job, "source").ok_or_else(|| anyhow::anyhow!("Missing source path"))?
+    };
+    let out = if clone {
+        prompt_path(
+            state,
+            "config_from_existing.output",
+            "Path to output .conf file",
+            seeded_value(job, "config"),
+        )?
+    } else {
+        seeded_value(job, "config").ok_or_else(|| anyhow::anyhow!("Missing config output"))?
+    };
+    let replay_job = JobRecord::new(
+        ActionKind::ConfigFromExisting,
+        format!("Repeat config from {}", display_path(&source)),
+    )
+    .with_input("source", source.clone())
+    .with_output("config", out.clone());
+    show_preview_and_confirm(&replay_job)?;
+    let is_csr = source.ends_with(".csr");
+    ssl_toolbox_core::config::generate_conf_from_cert_or_csr(&source, &out, is_csr)?;
+    println!("Success: OpenSSL config written to {}", display_path(&out));
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+fn replay_view_cert(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let cert = if clone {
+        prompt_path(
+            state,
+            "view_cert.input",
+            "Path to certificate file (.crt, .cer, .pem)",
+            seeded_value(job, "cert"),
+        )?
+    } else {
+        seeded_value(job, "cert").ok_or_else(|| anyhow::anyhow!("Missing certificate path"))?
+    };
+    let cert_content = std::fs::read(&cert)?;
+    display::display_cert_chain(&cert_content, "Certificate Details");
+    finalize_job(
+        state,
+        JobRecord::new(
+            ActionKind::ViewCert,
+            format!("Inspect certificate {}", display_path(&cert)),
+        )
+        .with_input("cert", cert),
+    );
+    Ok(())
+}
+
+fn replay_view_csr(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let csr = if clone {
+        prompt_path(
+            state,
+            "view_csr.input",
+            "Path to CSR file (.csr)",
+            seeded_value(job, "csr"),
+        )?
+    } else {
+        seeded_value(job, "csr").ok_or_else(|| anyhow::anyhow!("Missing CSR path"))?
+    };
+    let (cn, sans) = ssl_toolbox_core::key_csr::extract_csr_details(&csr)?;
+    println!("CommonName: {}", cn);
+    for san in sans {
+        println!("  {}", san);
+    }
+    finalize_job(
+        state,
+        JobRecord::new(
+            ActionKind::ViewCsr,
+            format!("Inspect CSR {}", display_path(&csr)),
+        )
+        .with_input("csr", csr),
+    );
+    Ok(())
+}
+
+fn replay_view_pfx(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let pfx = if clone {
+        prompt_path(
+            state,
+            "view_pfx.input",
+            "Path to PFX file (.pfx, .p12)",
+            seeded_value(job, "pfx"),
+        )?
+    } else {
+        seeded_value(job, "pfx").ok_or_else(|| anyhow::anyhow!("Missing PFX path"))?
+    };
+    let pfx_pass: String = password("Enter PFX password").interact()?;
+    let pfx_bytes = std::fs::read(&pfx)?;
+    let cert_chain = ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass)?;
+    display::display_cert_details_list(&cert_chain, "PFX Contents");
+    finalize_job(
+        state,
+        JobRecord::new(
+            ActionKind::ViewPfx,
+            format!("Inspect PFX {}", display_path(&pfx)),
+        )
+        .with_input("pfx", pfx),
+    );
+    Ok(())
+}
+
+fn replay_verify_https(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    replay_verify_endpoint(
+        state,
+        job,
+        clone,
+        ActionKind::VerifyHttps,
+        "https_host",
+        443,
+    )
+}
+
+fn replay_verify_ldaps(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    replay_verify_endpoint(
+        state,
+        job,
+        clone,
+        ActionKind::VerifyLdaps,
+        "ldaps_host",
+        636,
+    )
+}
+
+fn replay_verify_smtp(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    replay_verify_endpoint(state, job, clone, ActionKind::VerifySmtp, "smtp_host", 587)
+}
+
+fn replay_verify_endpoint(
+    state: &mut settings::UiState,
+    job: &JobRecord,
+    clone: bool,
+    kind: ActionKind,
+    host_key: &str,
+    default_port: u16,
+) -> Result<()> {
+    let host = if clone {
+        let label = match kind {
+            ActionKind::VerifyHttps => "Hostname (e.g. example.com)",
+            ActionKind::VerifyLdaps => "Hostname (e.g. ldap.example.com)",
+            ActionKind::VerifySmtp => "SMTP hostname (e.g. smtp.gmail.com)",
+            _ => "Hostname",
+        };
+        input(label)
+            .default_input(seeded_value(job, host_key).as_deref().unwrap_or(""))
+            .interact()?
+    } else {
+        seeded_value(job, host_key).ok_or_else(|| anyhow::anyhow!("Missing host"))?
+    };
+    let port = seeded_value(job, "port")
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(default_port);
+    let replay_job = JobRecord::new(kind, format!("Repeat {} {host}:{port}", kind.title()))
+        .with_input(host_key, host.clone())
+        .with_input("port", port.to_string());
+    let verify = confirm("Validate certificate?")
+        .initial_value(true)
+        .interact()?;
+    match kind {
+        ActionKind::VerifyHttps | ActionKind::VerifyLdaps => {
+            let result = ssl_toolbox_core::tls::connect_and_check(&host, port, verify)?;
+            display::display_tls_check_result(&result, kind.title());
+        }
+        ActionKind::VerifySmtp => {
+            let result = ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify)?;
+            display::display_tls_check_result(&result, kind.title());
+        }
+        _ => {}
+    }
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+fn replay_convert(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let input_path = if clone {
+        prompt_path(
+            state,
+            "convert.input",
+            "Path to certificate file",
+            seeded_value(job, "input"),
+        )?
+    } else {
+        seeded_value(job, "input").ok_or_else(|| anyhow::anyhow!("Missing convert input"))?
+    };
+    let output_path = if clone {
+        prompt_path(
+            state,
+            "convert.output",
+            "Path to output file",
+            seeded_value(job, "output"),
+        )?
+    } else {
+        seeded_value(job, "output").ok_or_else(|| anyhow::anyhow!("Missing convert output"))?
+    };
+    let format = convert_format_for_replay(job, &output_path);
+    let replay_job = JobRecord::new(
+        ActionKind::Convert,
+        format!("Repeat convert {}", display_path(&input_path)),
+    )
+    .with_input("input", input_path.clone())
+    .with_output("output", output_path.clone());
+    show_preview_and_confirm(&replay_job)?;
+    match format.as_str() {
+        "der" => ssl_toolbox_core::convert::pem_to_der(&input_path, &output_path)?,
+        "pem" => ssl_toolbox_core::convert::der_to_pem(&input_path, &output_path)?,
+        _ => ssl_toolbox_core::convert::pem_to_base64(&input_path, &output_path)?,
+    }
+    println!(
+        "Success: Converted artifact saved to {}",
+        display_path(&output_path)
+    );
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+fn replay_identify(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let input_path = if clone {
+        prompt_path(
+            state,
+            "identify.input",
+            "Path to certificate file",
+            seeded_value(job, "input"),
+        )?
+    } else {
+        seeded_value(job, "input").ok_or_else(|| anyhow::anyhow!("Missing identify input"))?
+    };
+    let data = std::fs::read(&input_path)?;
+    let format = ssl_toolbox_core::convert::detect_format(&data);
+    println!(
+        "Format: {}",
+        ssl_toolbox_core::convert::format_description(format)
+    );
+    finalize_job(
+        state,
+        JobRecord::new(
+            ActionKind::Identify,
+            format!("Identify artifact {}", display_path(&input_path)),
+        )
+        .with_input("input", input_path),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "sectigo")]
+fn replay_ca_submit(
+    state: &mut settings::UiState,
+    job: &JobRecord,
+    clone: bool,
+    debug: bool,
+) -> Result<()> {
+    let plugin = get_ca_plugin(debug)?;
+    let csr = if clone {
+        prompt_path(
+            state,
+            "ca_submit.csr",
+            "Path to .csr file",
+            seeded_value(job, "csr"),
+        )?
+    } else {
+        seeded_value(job, "csr").ok_or_else(|| anyhow::anyhow!("Missing CSR path"))?
+    };
+    let out = if clone {
+        prompt_path(
+            state,
+            "ca_submit.output",
+            "Path to output signed .crt file",
+            seeded_value(job, "cert"),
+        )?
+    } else {
+        seeded_value(job, "cert").ok_or_else(|| anyhow::anyhow!("Missing output cert"))?
+    };
+    let replay_job = build_ca_submit_job(&csr, &out, job.profile.as_deref());
+    show_preview_and_confirm(&replay_job)?;
+    let csr_content = std::fs::read_to_string(&csr)?;
+    let request_id = plugin.submit_csr(
+        &csr_content,
+        &ssl_toolbox_ca::SubmitOptions {
+            description: None,
+            product_code: None,
+            term_days: None,
+        },
+        debug,
+    )?;
+    std::thread::sleep(std::time::Duration::from_secs(20));
+    let cert_content =
+        plugin.collect_cert(&request_id, ssl_toolbox_ca::CollectFormat::PemCert, debug)?;
+    std::fs::write(&out, &cert_content)?;
+    display::display_cert_chain(cert_content.as_bytes(), "Downloaded Certificate Details");
+    finalize_job(state, replay_job);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_config_inputs() -> ConfigInputs {
+        ConfigInputs {
+            common_name: "svc.example.com".to_string(),
+            country: "US".to_string(),
+            state: "Texas".to_string(),
+            locality: "Austin".to_string(),
+            organization: "Example Corp".to_string(),
+            org_unit: "Platform".to_string(),
+            email: "pki@example.com".to_string(),
+            san_dns: vec!["svc.example.com".to_string(), "svc.internal".to_string()],
+            san_ips: vec!["10.0.0.5".to_string()],
+            key_size: 4096,
+            extended_key_usage: "serverAuth, clientAuth".to_string(),
+        }
+    }
+
+    #[test]
+    fn finalize_job_if_success_skips_failed_jobs() {
+        let mut state = settings::UiState::default();
+        let job = JobRecord::new(ActionKind::ViewCert, "Inspect missing cert")
+            .with_input("cert", "missing.crt");
+
+        finalize_job_if_success(&mut state, job, false);
+
+        assert!(state.recent_jobs.is_empty());
+        assert!(state.workflow.cert.is_none());
+    }
+
+    #[test]
+    fn replay_pfx_job_preserves_optional_chain() {
+        let job = build_replay_pfx_job(
+            ActionKind::CreatePfx,
+            "server.key",
+            "server.crt",
+            Some("chain.pem"),
+            "pfx",
+            "server.pfx",
+        );
+
+        assert_eq!(
+            job.inputs.get("chain").map(String::as_str),
+            Some("chain.pem")
+        );
+    }
+
+    #[test]
+    fn convert_replay_prefers_recorded_format_over_suffix() {
+        let job = JobRecord::new(ActionKind::Convert, "Repeat convert input.pem")
+            .with_input("input", "input.pem")
+            .with_output("output", "output.pem")
+            .with_replay_data("format", "base64");
+
+        assert_eq!(convert_format_for_replay(&job, "output.pem"), "base64");
+    }
+
+    #[test]
+    fn replay_jobs_preserve_profile_metadata() {
+        let generate = build_generate_job(
+            "server.cnf",
+            "server.key",
+            "server.csr",
+            Some("internal-ca"),
+        );
+        assert_eq!(generate.profile.as_deref(), Some("internal-ca"));
+
+        let ca_submit = build_ca_submit_job("server.csr", "server.crt", Some("internal-ca"));
+        assert_eq!(ca_submit.profile.as_deref(), Some("internal-ca"));
+    }
+
+    #[test]
+    fn new_config_job_round_trips_inputs_for_replay() {
+        let inputs = sample_config_inputs();
+        let job = build_new_config_job("server.cnf", Some("internal-ca"), Some(&inputs));
+        let restored = stored_new_config_inputs(&job).expect("stored config inputs");
+
+        assert_eq!(restored.common_name, inputs.common_name);
+        assert_eq!(restored.country, inputs.country);
+        assert_eq!(restored.state, inputs.state);
+        assert_eq!(restored.locality, inputs.locality);
+        assert_eq!(restored.organization, inputs.organization);
+        assert_eq!(restored.org_unit, inputs.org_unit);
+        assert_eq!(restored.email, inputs.email);
+        assert_eq!(restored.san_dns, inputs.san_dns);
+        assert_eq!(restored.san_ips, inputs.san_ips);
+        assert_eq!(restored.key_size, inputs.key_size);
+        assert_eq!(restored.extended_key_usage, inputs.extended_key_usage);
+    }
+
+    #[test]
+    fn old_new_config_jobs_fall_back_to_prompt_mode() {
+        let job = JobRecord::new(ActionKind::NewConfig, "Generate config server.cnf")
+            .with_output("config", "server.cnf");
+
+        assert!(matches!(
+            new_config_replay_source(&job),
+            NewConfigReplaySource::Prompt
+        ));
     }
 }
