@@ -114,10 +114,9 @@ pub fn collect_peer_chain(ssl: &SslRef) -> Vec<X509> {
     let leaf = ssl.peer_certificate();
 
     match ssl.peer_cert_chain() {
-        Some(cert_stack) => build_peer_chain(
-            leaf.as_ref().map(|cert| cert.as_ref()),
-            cert_stack.iter(),
-        ),
+        Some(cert_stack) => {
+            build_peer_chain(leaf.as_ref().map(|cert| cert.as_ref()), cert_stack.iter())
+        }
         None => build_peer_chain(leaf.as_ref().map(|cert| cert.as_ref()), std::iter::empty()),
     }
 }
