@@ -1680,13 +1680,13 @@ fn stored_new_config_inputs(job: &JobRecord) -> Option<ConfigInputs> {
 }
 
 enum NewConfigReplaySource {
-    Stored(ConfigInputs),
+    Stored(Box<ConfigInputs>),
     Prompt,
 }
 
 fn new_config_replay_source(job: &JobRecord) -> NewConfigReplaySource {
     stored_new_config_inputs(job)
-        .map(NewConfigReplaySource::Stored)
+        .map(|inputs| NewConfigReplaySource::Stored(Box::new(inputs)))
         .unwrap_or(NewConfigReplaySource::Prompt)
 }
 
@@ -2013,60 +2013,58 @@ fn prompt_path_inner(
         println!("Use a number, `?` for picker, a partial path for completion, or type a path.");
     }
 
-    loop {
-        let mut builder = input(label);
-        if let Some(default_display) = default_display.as_deref() {
-            builder = builder.default_input(default_display);
-        }
-        if !required {
-            builder = builder.required(false);
-        }
-
-        let raw: String = builder.interact()?;
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        if trimmed == "?" && !suggestions.is_empty() {
-            let mut picker = select(label);
-            for suggestion in suggestions.iter().take(12) {
-                let display = display_path(&suggestion.path);
-                picker = picker.item(suggestion.path.clone(), display, suggestion.path.clone());
-            }
-            let picked = picker.interact()?;
-            state.remember_path(key, &picked);
-            persist_ui_state(state);
-            return Ok(Some(picked));
-        }
-
-        if let Ok(number) = trimmed.parse::<usize>()
-            && number > 0
-            && let Some(suggestion) = suggestions.get(number - 1)
-        {
-            state.remember_path(key, &suggestion.path);
-            persist_ui_state(state);
-            return Ok(Some(suggestion.path.clone()));
-        }
-
-        let filtered = path_suggestions(
-            trimmed,
-            preferred_kind,
-            &state.recent_paths,
-            &state.workflow,
-            &workspace,
-        );
-        if let Some(completed) = workflow::complete_path(trimmed, &filtered) {
-            state.remember_path(key, &completed);
-            persist_ui_state(state);
-            return Ok(Some(completed));
-        }
-
-        let resolved = resolve_path(&raw);
-        state.remember_path(key, &resolved);
-        persist_ui_state(state);
-        return Ok(Some(resolved));
+    let mut builder = input(label);
+    if let Some(default_display) = default_display.as_deref() {
+        builder = builder.default_input(default_display);
     }
+    if !required {
+        builder = builder.required(false);
+    }
+
+    let raw: String = builder.interact()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    if trimmed == "?" && !suggestions.is_empty() {
+        let mut picker = select(label);
+        for suggestion in suggestions.iter().take(12) {
+            let display = display_path(&suggestion.path);
+            picker = picker.item(suggestion.path.clone(), display, suggestion.path.clone());
+        }
+        let picked = picker.interact()?;
+        state.remember_path(key, &picked);
+        persist_ui_state(state);
+        return Ok(Some(picked));
+    }
+
+    if let Ok(number) = trimmed.parse::<usize>()
+        && number > 0
+        && let Some(suggestion) = suggestions.get(number - 1)
+    {
+        state.remember_path(key, &suggestion.path);
+        persist_ui_state(state);
+        return Ok(Some(suggestion.path.clone()));
+    }
+
+    let filtered = path_suggestions(
+        trimmed,
+        preferred_kind,
+        &state.recent_paths,
+        &state.workflow,
+        &workspace,
+    );
+    if let Some(completed) = workflow::complete_path(trimmed, &filtered) {
+        state.remember_path(key, &completed);
+        persist_ui_state(state);
+        return Ok(Some(completed));
+    }
+
+    let resolved = resolve_path(&raw);
+    state.remember_path(key, &resolved);
+    persist_ui_state(state);
+    Ok(Some(resolved))
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -2558,7 +2556,7 @@ fn replay_new_config(state: &mut settings::UiState, job: &JobRecord, clone: bool
         seeded_value(job, "config").ok_or_else(|| anyhow::anyhow!("Missing config output"))?
     };
     let inputs = match new_config_replay_source(job) {
-        NewConfigReplaySource::Stored(inputs) => inputs,
+        NewConfigReplaySource::Stored(inputs) => *inputs,
         NewConfigReplaySource::Prompt => {
             let mut defaults = CsrDefaults::default();
             let replay_profile = job

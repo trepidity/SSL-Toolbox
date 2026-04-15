@@ -394,9 +394,7 @@ impl WorkspaceSnapshot {
             entry.set(file.kind, file.path.display().to_string());
         }
 
-        let best = families
-            .into_values()
-            .max_by_key(|memory| workflow_score(memory));
+        let best = families.into_values().max_by_key(workflow_score);
 
         best.unwrap_or_default()
     }
@@ -982,8 +980,10 @@ mod tests {
         let mut recent = BTreeMap::new();
         recent.insert("view_cert.input".to_string(), "recent/last.crt".to_string());
 
-        let mut workflow = WorkflowMemory::default();
-        workflow.cert = Some("memory/current.crt".to_string());
+        let workflow = WorkflowMemory {
+            cert: Some("memory/current.crt".to_string()),
+            ..WorkflowMemory::default()
+        };
 
         let suggestions = path_suggestions(
             "crt",
@@ -1103,8 +1103,10 @@ mod tests {
     #[test]
     fn next_steps_reflect_follow_up_workflow() {
         let job = JobRecord::new(ActionKind::Generate, "Generated CSR");
-        let mut memory = WorkflowMemory::default();
-        memory.csr = Some("csr/server.csr".to_string());
+        let memory = WorkflowMemory {
+            csr: Some("csr/server.csr".to_string()),
+            ..WorkflowMemory::default()
+        };
 
         let steps = next_steps(&job, &memory);
         assert!(steps.iter().any(|step| step.contains("Submit the CSR")));

@@ -160,7 +160,7 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
         file.write_all(contents)?;
         file.flush()?;
         set_private_file_permissions(path)?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(unix))]
