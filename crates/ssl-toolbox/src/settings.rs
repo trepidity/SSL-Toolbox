@@ -25,6 +25,7 @@ pub fn load_config() -> AppConfig {
 
 /// Load a CA plugin config file by name (e.g., "sectigo") from the config directories.
 /// Merges files in order: ~/.ssl-toolbox/<name>.json < ./.ssl-toolbox/<name>.json
+#[cfg(feature = "sectigo")]
 pub fn load_ca_config<T: serde::de::DeserializeOwned + Default>(name: &str) -> T {
     let filename = format!("{}.json", name);
     let mut result: Option<serde_json::Value> = None;

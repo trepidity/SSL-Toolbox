@@ -7,7 +7,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
@@ -114,12 +114,12 @@ impl BrowserApp {
     fn resume(&mut self, args: ResumeArgs) -> Result<()> {
         if let Some(location) = args.location {
             let location = StoreLocationContext::parse(&location)?;
-            self.current_location = Some(location);
             self.location_index = self
                 .locations
                 .iter()
                 .position(|candidate| *candidate == location)
                 .unwrap_or(0);
+            self.current_location = Some(location);
             self.load_stores()?;
             self.screen = Screen::Store;
         }
@@ -673,8 +673,8 @@ impl BrowserApp {
         let status = self
             .status
             .as_ref()
-            .map(|value| value.0.as_str())
-            .unwrap_or("");
+            .map(|value| value.0.clone())
+            .unwrap_or_default();
         let help = match self.screen {
             Screen::Location => "Enter open  s service  a alt-user  PgUp/PgDn jump  u elevate",
             Screen::Store => "Enter open  p physical  PgUp/PgDn jump  r refresh  Esc back",

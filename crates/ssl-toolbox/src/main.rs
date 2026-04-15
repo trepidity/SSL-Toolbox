@@ -702,6 +702,9 @@ fn execute_ca_command(
 }
 
 fn run_interactive_menu(debug: bool) -> Result<()> {
+    #[cfg(not(feature = "sectigo"))]
+    let _ = debug;
+
     let app_config = settings::load_config();
 
     intro("SSL/TLS Security Toolbox")?;
