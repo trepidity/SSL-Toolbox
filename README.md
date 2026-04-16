@@ -11,6 +11,7 @@ A cross-platform CLI for SSL/TLS certificate management. Generate keys and CSRs,
 | **TLS Verification** | Probe HTTPS, LDAPS, and SMTP STARTTLS endpoints; report negotiated cipher, TLS version support (1.0-1.3), and validate hostname/expiry/chain |
 | **Format Tools** | Convert between PEM, DER, and Base64; auto-detect certificate file formats |
 | **Config Generation** | Build OpenSSL `.cnf` files interactively or extract them from existing certificates and CSRs |
+| **Workflow** | Persistent workspace state tracks your active profile, artifacts, and recent jobs across sessions |
 | **CA Integration** | Submit CSRs to Sectigo SCM, list certificate profiles, and download signed certificates (feature-gated, optional) |
 
 ## Quick Start
@@ -138,9 +139,9 @@ For detailed usage of every command, see [docs/USER_MANUAL.md](docs/USER_MANUAL.
 ```
 ssl-toolbox (workspace)
   crates/
-    ssl-toolbox/           CLI binary: clap commands, interactive menu, display
-    ssl-toolbox-core/      Library: key/CSR gen, PFX, TLS, SMTP, validation, convert, config
-    ssl-toolbox-ca/        CA plugin trait (CaPlugin, CertProfile, SubmitOptions)
+    ssl-toolbox/            CLI binary: clap commands, interactive menu, display
+    ssl-toolbox-core/       Library: key/CSR gen, PFX, TLS, SMTP, validation, convert, config
+    ssl-toolbox-ca/         CA plugin trait (CaPlugin, CertProfile, SubmitOptions)
     ssl-toolbox-ca-sectigo/ Sectigo SCM implementation (feature-gated)
 ```
 
