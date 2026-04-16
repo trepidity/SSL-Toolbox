@@ -4,5 +4,8 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+echo "Running pre-push fmt check..."
+cargo fmt --all -- --check
+
 echo "Running pre-push clippy check..."
 cargo clippy --workspace -- -D warnings
