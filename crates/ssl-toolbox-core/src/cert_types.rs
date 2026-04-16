@@ -14,6 +14,21 @@ pub struct CertDetails {
     pub sha256_fingerprint: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateKeySummary {
+    pub present: bool,
+    pub algorithm: String,
+    pub key_size_bits: u32,
+    pub security_bits: u32,
+    pub matches_leaf_certificate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PfxDetails {
+    pub cert_chain: Vec<CertDetails>,
+    pub private_key: PrivateKeySummary,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigInputs {
     pub common_name: String,

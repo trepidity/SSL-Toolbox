@@ -361,9 +361,9 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
         Commands::ViewPfx { input } => {
             let pfx_bytes = std::fs::read(&input)?;
             let pfx_pass: String = password("Enter PFX password").interact()?;
-            match ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass) {
-                Ok(cert_chain) => {
-                    display::display_cert_details_list(&cert_chain, "PFX Contents");
+            match ssl_toolbox_core::pfx::extract_pfx_bundle_details(&pfx_bytes, &pfx_pass) {
+                Ok(details) => {
+                    display::display_pfx_details(&details, "PFX Contents");
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -921,9 +921,11 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 clear_screen()?;
                 let success = match std::fs::read(&input_path) {
                     Ok(pfx_bytes) => {
-                        match ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass) {
-                            Ok(cert_chain) => {
-                                display::display_cert_details_list(&cert_chain, "PFX Contents");
+                        match ssl_toolbox_core::pfx::extract_pfx_bundle_details(
+                            &pfx_bytes, &pfx_pass,
+                        ) {
+                            Ok(details) => {
+                                display::display_pfx_details(&details, "PFX Contents");
                                 true
                             }
                             Err(e) => {
@@ -2658,9 +2660,9 @@ fn replay_view_pfx(state: &mut settings::UiState, job: &JobRecord, clone: bool) 
     };
     let pfx_pass: String = password("Enter PFX password").interact()?;
     let pfx_bytes = std::fs::read(&pfx)?;
-    let cert_chain = ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass)?;
+    let details = ssl_toolbox_core::pfx::extract_pfx_bundle_details(&pfx_bytes, &pfx_pass)?;
     clear_screen()?;
-    display::display_cert_details_list(&cert_chain, "PFX Contents");
+    display::display_pfx_details(&details, "PFX Contents");
     finalize_job(
         state,
         JobRecord::new(

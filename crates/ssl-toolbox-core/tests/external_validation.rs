@@ -9,7 +9,8 @@ use ssl_toolbox_core::CertFormat;
 use ssl_toolbox_core::convert::{der_to_pem, detect_format, pem_to_base64, pem_to_der};
 use ssl_toolbox_core::key_csr::{extract_csr_details, generate_key_and_csr};
 use ssl_toolbox_core::pfx::{
-    create_pfx, create_pfx_legacy, create_pfx_legacy_3des, extract_pfx_details,
+    create_pfx, create_pfx_legacy, create_pfx_legacy_3des, extract_pfx_bundle_details,
+    extract_pfx_details,
 };
 use ssl_toolbox_core::x509_utils::extract_cert_chain_details;
 
@@ -170,6 +171,12 @@ fn pfx_outputs_are_accepted_by_openssl_and_keytool() -> Result<(), Box<dyn Error
     assert!(!details[0].serial_number.is_empty());
     assert!(details[0].sha1_fingerprint.contains(':'));
     assert!(details[0].sha256_fingerprint.contains(':'));
+    let bundle = extract_pfx_bundle_details(&fs::read(&pfx)?, pfx_password)?;
+    assert!(bundle.private_key.present);
+    assert_eq!(bundle.private_key.algorithm, "RSA");
+    assert_eq!(bundle.private_key.key_size_bits, 2048);
+    assert!(bundle.private_key.security_bits >= 112);
+    assert!(bundle.private_key.matches_leaf_certificate);
     assert_eq!(detect_format(&fs::read(&pfx)?), CertFormat::Pkcs12);
 
     let openssl_leaf = run_command(

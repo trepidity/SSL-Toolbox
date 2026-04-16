@@ -1,4 +1,6 @@
-use ssl_toolbox_core::{CertDetails, CertValidation, TlsCheckResult};
+use ssl_toolbox_core::{
+    CertDetails, CertValidation, PfxDetails, PrivateKeySummary, TlsCheckResult,
+};
 
 fn print_cert_detail_lines(prefix: &str, details: &CertDetails) {
     println!("{prefix}  CommonName: {}", details.common_name);
@@ -16,6 +18,28 @@ fn print_cert_detail_lines(prefix: &str, details: &CertDetails) {
         "{prefix}  SHA256 Fingerprint: {}",
         details.sha256_fingerprint
     );
+}
+
+fn display_private_key_summary(summary: &PrivateKeySummary) {
+    println!("┌─ Private Key ────────────────────────────────────────────────");
+    println!(
+        "│  Present:              {}",
+        if summary.present { "Yes" } else { "No" }
+    );
+    if summary.present {
+        println!("│  Key Algorithm:        {}", summary.algorithm);
+        println!("│  Key Size:             {} bits", summary.key_size_bits);
+        println!("│  Security Bits:        {}", summary.security_bits);
+        println!(
+            "│  Matches Leaf Cert:    {}",
+            if summary.matches_leaf_certificate {
+                "Yes"
+            } else {
+                "No"
+            }
+        );
+    }
+    println!("└────────────────────────────────────────────────────────────────\n");
 }
 
 /// Display certificate chain details from raw certificate file content.
@@ -81,6 +105,60 @@ pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
             }
             println!("└────────────────────────────────────────────────────────────────\n");
         }
+    }
+}
+
+/// Display PFX contents including the private-key summary.
+pub fn display_pfx_details(details: &PfxDetails, title: &str) {
+    println!("\n╔═══════════════════════════════════════════════════════════════╗");
+    println!(
+        "║  {:^59}  ║",
+        format!("{} ({} certs)", title, details.cert_chain.len())
+    );
+    println!("╚═══════════════════════════════════════════════════════════════╝\n");
+
+    display_private_key_summary(&details.private_key);
+
+    if details.cert_chain.len() == 1 {
+        let cert = &details.cert_chain[0];
+        print_cert_detail_lines("", cert);
+        if cert.sans.is_empty() {
+            println!("  SANs: None");
+        } else {
+            println!("  SANs:");
+            for san in &cert.sans {
+                println!("    • {}", san);
+            }
+        }
+        println!();
+        return;
+    }
+
+    for (idx, cert) in details.cert_chain.iter().enumerate() {
+        let cert_type = if idx == 0 {
+            "Leaf Certificate"
+        } else if idx == details.cert_chain.len() - 1 {
+            "Root / Top of Chain"
+        } else {
+            "Intermediate Certificate"
+        };
+
+        println!(
+            "┌─ Certificate #{} - {} ─────────────────────────",
+            idx + 1,
+            cert_type
+        );
+        print_cert_detail_lines("│", cert);
+
+        if cert.sans.is_empty() {
+            println!("│  SANs: None");
+        } else {
+            println!("│  SANs:");
+            for san in &cert.sans {
+                println!("│    • {}", san);
+            }
+        }
+        println!("└────────────────────────────────────────────────────────────────\n");
     }
 }
 
