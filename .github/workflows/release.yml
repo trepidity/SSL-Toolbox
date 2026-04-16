@@ -11,7 +11,10 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    needs: prepare
     runs-on: ${{ matrix.os }}
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +71,7 @@ jobs:
       - name: Package (Unix)
         if: matrix.archive_ext == 'tar.gz'
         run: |
-          ARCHIVE_NAME="ssl-toolbox-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          ARCHIVE_NAME="ssl-toolbox-v${PACKAGE_VERSION}-${{ matrix.target }}"
           mkdir -p "${ARCHIVE_NAME}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${ARCHIVE_NAME}/"
           cp README.md LICENSE-MIT LICENSE-APACHE "${ARCHIVE_NAME}/"
@@ -79,7 +82,7 @@ jobs:
         if: matrix.archive_ext == 'zip'
         shell: pwsh
         run: |
-          $archiveName = "ssl-toolbox-$($env:GITHUB_REF_NAME)-${{ matrix.target }}"
+          $archiveName = "ssl-toolbox-v$($env:PACKAGE_VERSION)-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $archiveName
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$archiveName/"
           Copy-Item "README.md", "LICENSE-MIT", "LICENSE-APACHE" "$archiveName/"
@@ -89,12 +92,42 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ssl-toolbox-${{ matrix.target }}
+          name: ssl-toolbox-v${{ env.PACKAGE_VERSION }}-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
+
+  prepare:
+    name: Resolve package version
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.package_version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read workspace package version
+        id: package_version
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const cargoToml = fs.readFileSync('Cargo.toml', 'utf8');
+            const match = cargoToml.match(/\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m);
+            if (!match) {
+              core.setFailed('Could not find [workspace.package].version in Cargo.toml');
+              return;
+            }
+            core.setOutput('value', match[1]);
+
+      - name: Validate tag matches package version
+        run: |
+          EXPECTED_TAG="v${{ steps.package_version.outputs.value }}"
+          if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match package version ${EXPECTED_TAG}" >&2
+            exit 1
+          fi
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -115,7 +148,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          name: ssl-toolbox v${{ needs.prepare.outputs.package_version }}
           files: |
-            artifacts/ssl-toolbox-*.tar.gz
-            artifacts/ssl-toolbox-*.zip
+            artifacts/ssl-toolbox-v${{ needs.prepare.outputs.package_version }}-*.tar.gz
+            artifacts/ssl-toolbox-v${{ needs.prepare.outputs.package_version }}-*.zip
             artifacts/sha256sums.txt
