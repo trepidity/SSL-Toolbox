@@ -638,7 +638,13 @@ pub fn suggest_output_path(base_input: &str, target: ArtifactKind) -> Option<Str
         ArtifactKind::LegacyPfx => format!("{stem}.legacy.pfx"),
     };
 
-    Some(parent.join(file_name).display().to_string().replace('\\', "/"))
+    Some(
+        parent
+            .join(file_name)
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
