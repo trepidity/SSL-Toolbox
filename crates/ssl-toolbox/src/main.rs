@@ -5,7 +5,10 @@ mod workflow;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use cliclack::{clear_screen, confirm, input, intro, outro, password, select};
-use crossterm::style::{Color, Stylize};
+use crossterm::{
+    style::{Color, Stylize},
+    terminal,
+};
 use dotenvy::dotenv;
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -1791,37 +1794,179 @@ fn build_main_menu() -> Vec<PaletteEntry> {
     items
 }
 
-fn print_main_menu(items: &[PaletteEntry]) {
-    fn menu_accent(item: &PaletteEntry) -> Color {
-        match item.alias {
-            "g" | "new" | "config" => Color::Green,
-            "pfx" | "legacy" | "convert" => Color::Cyan,
-            "cert" | "csr" | "vpfx" | "id" => Color::Magenta,
-            "https" | "ldaps" | "smtp" => Color::Blue,
-            "submit" | "profiles" => Color::Yellow,
-            "q" => Color::Red,
-            _ => Color::White,
-        }
+#[derive(Clone, Copy)]
+struct MenuGroup {
+    title: &'static str,
+    color: Color,
+    aliases: &'static [&'static str],
+}
+
+fn compact_menu_title(item: &PaletteEntry) -> &'static str {
+    match item.alias {
+        "g" => "Generate CSR",
+        "pfx" => "Create PFX",
+        "legacy" => "Legacy PFX",
+        "new" => "New Config",
+        "config" => "Config from Cert/CSR",
+        "cert" => "View Certificate",
+        "csr" => "View CSR",
+        "vpfx" => "View PFX",
+        "https" => "Verify HTTPS",
+        "ldaps" => "Verify LDAPS",
+        "smtp" => "Verify SMTP",
+        "convert" => "Convert Format",
+        "id" => "Identify Format",
+        "submit" => "Submit CSR",
+        "profiles" => "List Profiles",
+        "q" => "Exit",
+        _ => item.title,
     }
+}
+
+fn menu_groups() -> Vec<MenuGroup> {
+    vec![
+        MenuGroup {
+            title: "Build",
+            color: Color::Green,
+            aliases: &["g", "pfx", "legacy", "new", "config"],
+        },
+        MenuGroup {
+            title: "Inspect",
+            color: Color::Magenta,
+            aliases: &["cert", "csr", "vpfx", "id"],
+        },
+        MenuGroup {
+            title: "Verify",
+            color: Color::Blue,
+            aliases: &["https", "ldaps", "smtp"],
+        },
+        MenuGroup {
+            title: "Tools",
+            color: Color::Cyan,
+            aliases: &["convert"],
+        },
+        MenuGroup {
+            title: "CA",
+            color: Color::Yellow,
+            aliases: &["submit", "profiles"],
+        },
+        MenuGroup {
+            title: "Exit",
+            color: Color::Red,
+            aliases: &["q"],
+        },
+    ]
+}
+
+fn grouped_menu_sections(items: &[PaletteEntry]) -> Vec<(MenuGroup, Vec<String>)> {
+    menu_groups()
+        .into_iter()
+        .filter_map(|group| {
+            let entries = group
+                .aliases
+                .iter()
+                .filter_map(|alias| {
+                    items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item)| item.alias == *alias)
+                        .map(|(index, item)| {
+                            format!(
+                                "{:>2} [{}] {}",
+                                index + 1,
+                                item.alias,
+                                compact_menu_title(item)
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+
+            if entries.is_empty() {
+                None
+            } else {
+                Some((group, entries))
+            }
+        })
+        .collect()
+}
+
+fn menu_column_width(sections: &[(MenuGroup, Vec<String>)]) -> usize {
+    sections
+        .iter()
+        .flat_map(|(group, entries)| {
+            std::iter::once(group.title.len()).chain(entries.iter().map(|entry| entry.len()))
+        })
+        .max()
+        .unwrap_or(24)
+        .clamp(24, 34)
+        + 2
+}
+
+fn menu_column_count(column_width: usize) -> usize {
+    let terminal_width = terminal::size()
+        .map(|(width, _)| width as usize)
+        .unwrap_or(120);
+
+    if terminal_width >= (column_width * 3) + 8 {
+        3
+    } else if terminal_width >= (column_width * 2) + 6 {
+        2
+    } else {
+        1
+    }
+}
+
+fn print_main_menu(items: &[PaletteEntry]) {
+    let sections = grouped_menu_sections(items);
+    let column_width = menu_column_width(&sections);
+    let column_count = menu_column_count(column_width);
 
     println!();
     println!("{}", "Quick Menu".with(Color::Cyan).bold());
-    println!("{}", "Choose a number or type an alias.".dark_grey());
-    for (index, item) in items.iter().enumerate() {
-        let accent = menu_accent(item);
-        println!(
-            "  {}  {}  {}",
-            format!("{:>2}.", index + 1).dark_grey(),
-            format!("[{}]", item.alias).with(accent).bold(),
-            item.title.with(accent).bold()
-        );
-        println!("      {}", item.description.dark_grey());
+    println!("{}", "Choose a number, alias, or /query.".dark_grey());
+    println!(
+        "{}",
+        "Grouped view keeps the default menu compact; /query shows detailed matches.".dark_grey()
+    );
+    println!();
 
-        if index + 1 < items.len() {
+    for group_row in sections.chunks(column_count) {
+        for (index, (group, _)) in group_row.iter().enumerate() {
+            if index > 0 {
+                print!("  ");
+            }
+            print!(
+                "{}",
+                format!("{:<width$}", group.title, width = column_width)
+                    .with(group.color)
+                    .bold()
+            );
+        }
+        println!();
+
+        let max_group_height = group_row
+            .iter()
+            .map(|(_, entries)| entries.len())
+            .max()
+            .unwrap_or(0);
+
+        for line_index in 0..max_group_height {
+            for (index, (group, entries)) in group_row.iter().enumerate() {
+                if index > 0 {
+                    print!("  ");
+                }
+                let entry = entries.get(line_index).map(String::as_str).unwrap_or("");
+                print!(
+                    "{}",
+                    format!("{entry:<width$}", width = column_width).with(group.color)
+                );
+            }
             println!();
         }
+
+        println!();
     }
-    println!();
+
     println!(
         "{} {}  {} {}  {} {}  {} {}  {} {}  {} {}",
         "Palette".dark_grey(),
@@ -3203,5 +3348,35 @@ mod tests {
             err.to_string().contains("valid host/domain"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn build_main_menu_keeps_expected_verify_group_aliases() {
+        let items = build_main_menu();
+        let aliases = items.iter().map(|item| item.alias).collect::<Vec<_>>();
+
+        assert!(aliases.contains(&"https"));
+        assert!(aliases.contains(&"ldaps"));
+        assert!(aliases.contains(&"smtp"));
+        assert!(aliases.contains(&"q"));
+    }
+
+    #[test]
+    fn grouped_menu_sections_include_horizontal_groups_with_entries() {
+        let items = build_main_menu();
+        let sections = grouped_menu_sections(&items);
+
+        assert_eq!(
+            sections.first().map(|(group, _)| group.title),
+            Some("Build")
+        );
+        assert!(
+            sections
+                .iter()
+                .any(|(group, entries)| group.title == "Verify"
+                    && entries.iter().any(|entry| entry.contains("[https]")))
+        );
+        assert!(sections.iter().any(|(group, entries)| group.title == "Exit"
+            && entries.iter().any(|entry| entry.contains("[q]"))));
     }
 }
