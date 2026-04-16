@@ -71,7 +71,7 @@ URI.1 = spiffe://example.test/service
         &["req", "-in", path_str(&csr)?, "-noout", "-verify", "-text"],
     )?;
     assert!(
-        verify.stdout.contains("Subject: C=US, ST=Texas, L=Austin, O=SSL Toolbox, OU=Platform, CN=svc.example.test, emailAddress=certs@example.test"),
+        normalize_openssl_subject(&verify.stdout).contains("Subject: C=US, ST=Texas, L=Austin, O=SSL Toolbox, OU=Platform, CN=svc.example.test, emailAddress=certs@example.test"),
         "unexpected openssl CSR text:\n{}",
         verify.stdout
     );
@@ -333,7 +333,7 @@ fn legacy_pfx_and_converted_formats_round_trip_through_external_tools() -> Resul
         &base64_subject.stdout,
     ] {
         assert!(
-            output.contains("CN=svc.example.test"),
+            normalize_openssl_subject(output).contains("CN=svc.example.test"),
             "unexpected openssl certificate subject output:\n{}",
             output
         );
@@ -540,6 +540,12 @@ fn command_exists(name: &str) -> bool {
 
 fn normalize_pem(value: &str) -> String {
     value.lines().map(str::trim).collect::<Vec<_>>().join("\n")
+}
+
+/// Collapse ` = ` to `=` so assertions work with any OpenSSL version.
+/// Older versions print `CN=foo`, newer ones print `CN = foo`.
+fn normalize_openssl_subject(s: &str) -> String {
+    s.replace(" = ", "=")
 }
 
 fn path_str(path: &Path) -> Result<&str, Box<dyn Error>> {
