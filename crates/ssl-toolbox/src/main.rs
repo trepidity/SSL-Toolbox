@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use cliclack::{clear_screen, confirm, input, intro, outro, password, select};
 use crossterm::style::{Color, Stylize};
 use dotenvy::dotenv;
+use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -115,6 +116,9 @@ enum Commands {
         /// Skip certificate validation
         #[arg(long)]
         no_verify: bool,
+        /// Probe each protocol version against the locally testable cipher-suite set
+        #[arg(long)]
+        full_scan: bool,
     },
     /// Verify TLS certificate and protocol for an LDAPS endpoint
     VerifyLdaps {
@@ -125,6 +129,9 @@ enum Commands {
         /// Skip certificate validation
         #[arg(long)]
         no_verify: bool,
+        /// Probe each protocol version against the locally testable cipher-suite set
+        #[arg(long)]
+        full_scan: bool,
     },
     /// Verify TLS certificate via SMTP STARTTLS
     VerifySmtp {
@@ -374,10 +381,16 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             host,
             port,
             no_verify,
+            full_scan,
         } => {
-            println!("\nConnecting to {}:{}...", host, port);
+            let (host, port) = normalize_tls_endpoint_target(&host, port, 443)?;
+            println!(
+                "\nConnecting to {}:{}...",
+                format_connect_target(&host),
+                port
+            );
             let verify = !no_verify;
-            match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
+            match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
                 Ok(result) => {
                     display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
                 }
@@ -390,10 +403,16 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             host,
             port,
             no_verify,
+            full_scan,
         } => {
-            println!("\nConnecting to {}:{}...", host, port);
+            let (host, port) = normalize_tls_endpoint_target(&host, port, 636)?;
+            println!(
+                "\nConnecting to {}:{}...",
+                format_connect_target(&host),
+                port
+            );
             let verify = !no_verify;
-            match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
+            match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
                 Ok(result) => {
                     display::display_tls_check_result(&result, "LDAPS Endpoint Verification");
                 }
@@ -951,16 +970,26 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 should_pause = true;
             }
             8 => {
-                let host: String = input("Hostname (e.g. example.com)").interact()?;
+                let raw_host: String = input("Hostname (e.g. example.com)").interact()?;
                 let port_str: String = input("Port").default_input("443").interact()?;
-                let port: u16 = port_str.parse().unwrap_or(443);
+                let requested_port: u16 = port_str.parse().unwrap_or(443);
+                let (host, port) = normalize_tls_endpoint_target(&raw_host, requested_port, 443)?;
                 let verify: bool = confirm("Validate certificate?")
                     .initial_value(true)
                     .interact()?;
+                let full_scan: bool = confirm("Scan all supported protocol/cipher suites?")
+                    .initial_value(false)
+                    .interact()?;
 
                 clear_screen()?;
-                println!("\nConnecting to {}:{}...", host, port);
-                let success = match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
+                println!(
+                    "\nConnecting to {}:{}...",
+                    format_connect_target(&host),
+                    port
+                );
+                let success = match ssl_toolbox_core::tls::connect_and_check(
+                    &host, port, verify, full_scan,
+                ) {
                     Ok(result) => {
                         display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
                         true
@@ -977,22 +1006,33 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         format!("Verify HTTPS endpoint {host}:{port}"),
                     )
                     .with_input("https_host", host)
-                    .with_input("port", port.to_string()),
+                    .with_input("port", port.to_string())
+                    .with_input("full_scan", full_scan.to_string()),
                     success,
                 );
                 should_pause = true;
             }
             9 => {
-                let host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
+                let raw_host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
                 let port_str: String = input("Port").default_input("636").interact()?;
-                let port: u16 = port_str.parse().unwrap_or(636);
+                let requested_port: u16 = port_str.parse().unwrap_or(636);
+                let (host, port) = normalize_tls_endpoint_target(&raw_host, requested_port, 636)?;
                 let verify: bool = confirm("Validate certificate?")
                     .initial_value(true)
                     .interact()?;
+                let full_scan: bool = confirm("Scan all supported protocol/cipher suites?")
+                    .initial_value(false)
+                    .interact()?;
 
                 clear_screen()?;
-                println!("\nConnecting to {}:{}...", host, port);
-                let success = match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
+                println!(
+                    "\nConnecting to {}:{}...",
+                    format_connect_target(&host),
+                    port
+                );
+                let success = match ssl_toolbox_core::tls::connect_and_check(
+                    &host, port, verify, full_scan,
+                ) {
                     Ok(result) => {
                         display::display_tls_check_result(&result, "LDAPS Endpoint Verification");
                         true
@@ -1009,7 +1049,8 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         format!("Verify LDAPS endpoint {host}:{port}"),
                     )
                     .with_input("ldaps_host", host)
-                    .with_input("port", port.to_string()),
+                    .with_input("port", port.to_string())
+                    .with_input("full_scan", full_scan.to_string()),
                     success,
                 );
                 should_pause = true;
@@ -2330,6 +2371,126 @@ fn seeded_value(job: &JobRecord, key: &str) -> Option<String> {
         .cloned()
 }
 
+fn seeded_bool(job: &JobRecord, key: &str, default: bool) -> bool {
+    seeded_value(job, key)
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" | "enabled" => Some(true),
+            "0" | "false" | "no" | "off" | "disabled" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedEndpointInput {
+    host: String,
+    port: Option<u16>,
+}
+
+fn normalize_tls_endpoint_target(
+    raw_host: &str,
+    port: u16,
+    default_port: u16,
+) -> Result<(String, u16)> {
+    let parsed = parse_endpoint_input(raw_host)?;
+    let effective_port = if port == default_port {
+        parsed.port.unwrap_or(port)
+    } else {
+        port
+    };
+    Ok((parsed.host, effective_port))
+}
+
+fn parse_endpoint_input(raw: &str) -> Result<ParsedEndpointInput> {
+    let mut candidate = raw.trim().trim_matches(|ch| ch == '"' || ch == '\'');
+    if candidate.is_empty() {
+        return Err(anyhow::anyhow!("Host/domain input is empty"));
+    }
+
+    let mut had_scheme = false;
+    if let Some((_, rest)) = candidate.split_once("://") {
+        had_scheme = true;
+        candidate = rest;
+    }
+
+    if had_scheme && candidate.starts_with('/') {
+        return Err(anyhow::anyhow!(
+            "Could not find a valid host/domain in the input"
+        ));
+    }
+
+    candidate = candidate.trim_start_matches('/');
+
+    if let Some((before, _)) = candidate.split_once(['/', '?', '#']) {
+        candidate = before;
+    }
+
+    if let Some((_, host_part)) = candidate.rsplit_once('@') {
+        candidate = host_part;
+    }
+
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Could not find a valid host/domain in the input"
+        ));
+    }
+    if candidate.chars().any(char::is_whitespace) {
+        return Err(anyhow::anyhow!(
+            "Host/domain contains whitespace after cleanup: {candidate}"
+        ));
+    }
+
+    if let Some(rest) = candidate.strip_prefix('[') {
+        let (host, remainder) = rest
+            .split_once(']')
+            .ok_or_else(|| anyhow::anyhow!("Invalid bracketed host/domain: {candidate}"))?;
+        let port = if remainder.is_empty() {
+            None
+        } else if let Some(raw_port) = remainder.strip_prefix(':') {
+            Some(parse_endpoint_port(raw_port, candidate)?)
+        } else {
+            return Err(anyhow::anyhow!("Invalid host/domain input: {candidate}"));
+        };
+
+        return Ok(ParsedEndpointInput {
+            host: host.to_string(),
+            port,
+        });
+    }
+
+    if let Some((host, raw_port)) = candidate.rsplit_once(':')
+        && !host.is_empty()
+        && !raw_port.is_empty()
+        && raw_port.chars().all(|ch| ch.is_ascii_digit())
+        && !host.contains(':')
+    {
+        return Ok(ParsedEndpointInput {
+            host: host.to_string(),
+            port: Some(parse_endpoint_port(raw_port, candidate)?),
+        });
+    }
+
+    Ok(ParsedEndpointInput {
+        host: candidate.to_string(),
+        port: None,
+    })
+}
+
+fn parse_endpoint_port(raw_port: &str, original: &str) -> Result<u16> {
+    raw_port.parse::<u16>().map_err(|_| {
+        anyhow::anyhow!("Invalid port in host/domain input `{original}`: `{raw_port}`")
+    })
+}
+
+fn format_connect_target(host: &str) -> Cow<'_, str> {
+    if host.contains(':') {
+        Cow::Owned(format!("[{host}]"))
+    } else {
+        Cow::Borrowed(host)
+    }
+}
+
 fn replay_generate(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
     let conf = if clone {
         prompt_path(
@@ -2724,17 +2885,34 @@ fn replay_verify_endpoint(
     let port = seeded_value(job, "port")
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(default_port);
+    let (host, port) = if matches!(kind, ActionKind::VerifyHttps | ActionKind::VerifyLdaps) {
+        normalize_tls_endpoint_target(&host, port, default_port)?
+    } else {
+        (host, port)
+    };
     let replay_job = JobRecord::new(kind, format!("Repeat {} {host}:{port}", kind.title()))
         .with_input(host_key, host.clone())
         .with_input("port", port.to_string());
     let verify = confirm("Validate certificate?")
         .initial_value(true)
         .interact()?;
+    let full_scan = if matches!(kind, ActionKind::VerifyHttps | ActionKind::VerifyLdaps) {
+        confirm("Scan all supported protocol/cipher suites?")
+            .initial_value(seeded_bool(job, "full_scan", false))
+            .interact()?
+    } else {
+        false
+    };
+    let replay_job = replay_job.with_input("full_scan", full_scan.to_string());
     clear_screen()?;
-    println!("\nConnecting to {}:{}...", host, port);
+    println!(
+        "\nConnecting to {}:{}...",
+        format_connect_target(&host),
+        port
+    );
     match kind {
         ActionKind::VerifyHttps | ActionKind::VerifyLdaps => {
-            let result = ssl_toolbox_core::tls::connect_and_check(&host, port, verify)?;
+            let result = ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan)?;
             display::display_tls_check_result(&result, kind.title());
         }
         ActionKind::VerifySmtp => {
@@ -2971,5 +3149,59 @@ mod tests {
             new_config_replay_source(&job),
             NewConfigReplaySource::Prompt
         ));
+    }
+
+    #[test]
+    fn parse_endpoint_input_accepts_https_url_with_port() {
+        let parsed =
+            parse_endpoint_input("https://accessone.bswhealth.com:443").expect("parsed input");
+
+        assert_eq!(
+            parsed,
+            ParsedEndpointInput {
+                host: "accessone.bswhealth.com".to_string(),
+                port: Some(443),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_endpoint_input_strips_path_query_fragment_and_userinfo() {
+        let parsed = parse_endpoint_input("https://user:pass@example.com:8443/path?a=b#frag")
+            .expect("parsed input");
+
+        assert_eq!(
+            parsed,
+            ParsedEndpointInput {
+                host: "example.com".to_string(),
+                port: Some(8443),
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_tls_endpoint_target_uses_embedded_port_when_default_was_requested() {
+        let normalized =
+            normalize_tls_endpoint_target("ldaps://ldap.example.com:1636/ou=People", 636, 636)
+                .expect("normalized target");
+
+        assert_eq!(normalized, ("ldap.example.com".to_string(), 1636));
+    }
+
+    #[test]
+    fn normalize_tls_endpoint_target_preserves_explicit_non_default_port() {
+        let normalized = normalize_tls_endpoint_target("https://example.com:8443", 9443, 443)
+            .expect("normalized target");
+
+        assert_eq!(normalized, ("example.com".to_string(), 9443));
+    }
+
+    #[test]
+    fn parse_endpoint_input_rejects_empty_host_after_cleanup() {
+        let err = parse_endpoint_input("https:///path").expect_err("invalid input");
+        assert!(
+            err.to_string().contains("valid host/domain"),
+            "unexpected error: {err}"
+        );
     }
 }

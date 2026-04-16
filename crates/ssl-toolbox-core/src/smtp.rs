@@ -127,6 +127,7 @@ pub fn connect_and_check_smtp(host: &str, port: u16, verify: bool) -> Result<Tls
         cipher,
         cert_chain,
         version_support,
+        cipher_scan: Vec::new(),
         validation,
     })
 }

@@ -342,6 +342,7 @@ ssl-toolbox verify-https --host example.com --no-verify
 **Output includes:**
 - Negotiated protocol version and cipher suite
 - TLS version support table (TLS 1.0, 1.1, 1.2, 1.3)
+- Optional full protocol/cipher-suite scan with `--full-scan` for HTTPS and LDAPS across the locally testable cipher set
 - Certificate validation: hostname match, expiry check, chain verification
 - Full certificate chain with SANs
 

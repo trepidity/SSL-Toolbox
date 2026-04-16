@@ -189,6 +189,32 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
         println!("└────────────────────────────────────────────────────────────────\n");
     }
 
+    if !result.cipher_scan.is_empty() {
+        println!("┌─ Full Protocol / Cipher Scan ───────────────────────────────");
+        for protocol in &result.cipher_scan {
+            println!(
+                "│  {}: {}/{} locally testable cipher suite{} supported",
+                protocol.protocol,
+                protocol.supported_ciphers.len(),
+                protocol.tested_cipher_count,
+                if protocol.tested_cipher_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+
+            if protocol.supported_ciphers.is_empty() {
+                println!("│    None detected");
+            } else {
+                for cipher in &protocol.supported_ciphers {
+                    println!("│    • {} ({} bits)", cipher.name, cipher.bits);
+                }
+            }
+        }
+        println!("└────────────────────────────────────────────────────────────────\n");
+    }
+
     // Certificate validation
     if let Some(validation) = &result.validation {
         display_validation(validation);

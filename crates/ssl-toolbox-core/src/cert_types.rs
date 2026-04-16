@@ -71,12 +71,20 @@ pub struct TlsVersionProbeResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsCipherScanResult {
+    pub protocol: String,
+    pub tested_cipher_count: usize,
+    pub supported_ciphers: Vec<CipherInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsCheckResult {
     pub host: String,
     pub port: u16,
     pub cipher: CipherInfo,
     pub cert_chain: Vec<CertDetails>,
     pub version_support: Vec<TlsVersionProbeResult>,
+    pub cipher_scan: Vec<TlsCipherScanResult>,
     pub validation: Option<CertValidation>,
 }
 
