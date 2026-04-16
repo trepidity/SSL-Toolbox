@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::ssl::SslRef;
 use openssl::x509::{X509, X509Ref};
@@ -53,6 +54,41 @@ fn extract_issuer_cn(cert: &X509Ref) -> String {
         })
 }
 
+fn extract_signature_algorithm(cert: &X509Ref) -> String {
+    cert.signature_algorithm()
+        .object()
+        .nid()
+        .long_name()
+        .ok()
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+fn extract_public_key_bits(cert: &X509Ref) -> u32 {
+    cert.public_key().map(|key| key.bits()).unwrap_or(0)
+}
+
+fn extract_serial_number(cert: &X509Ref) -> String {
+    cert.serial_number()
+        .to_bn()
+        .ok()
+        .and_then(|bn| bn.to_hex_str().ok().map(|serial| serial.to_string()))
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn format_fingerprint(cert: &X509Ref, digest: MessageDigest) -> String {
+    cert.digest(digest)
+        .ok()
+        .map(|bytes| {
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<Vec<_>>()
+                .join(":")
+        })
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
 /// Convert an X509Ref to a CertDetails struct. Single canonical implementation.
 pub fn x509_to_cert_details(cert: &X509Ref) -> CertDetails {
     let subject = cert.subject_name();
@@ -67,6 +103,11 @@ pub fn x509_to_cert_details(cert: &X509Ref) -> CertDetails {
     let not_before = cert.not_before().to_string();
     let not_after = cert.not_after().to_string();
     let issuer_cn = extract_issuer_cn(cert);
+    let signature_algorithm = extract_signature_algorithm(cert);
+    let public_key_bits = extract_public_key_bits(cert);
+    let serial_number = extract_serial_number(cert);
+    let sha1_fingerprint = format_fingerprint(cert, MessageDigest::sha1());
+    let sha256_fingerprint = format_fingerprint(cert, MessageDigest::sha256());
 
     CertDetails {
         common_name,
@@ -74,6 +115,11 @@ pub fn x509_to_cert_details(cert: &X509Ref) -> CertDetails {
         not_before,
         not_after,
         issuer: issuer_cn,
+        signature_algorithm,
+        public_key_bits,
+        serial_number,
+        sha1_fingerprint,
+        sha256_fingerprint,
     }
 }
 
@@ -311,5 +357,21 @@ mod tests {
             .collect();
 
         assert_eq!(common_names, vec!["leaf.example.com"]);
+    }
+
+    #[test]
+    fn x509_to_cert_details_extracts_extended_metadata() {
+        let cert = make_test_cert("leaf.example.com", "Test Intermediate");
+
+        let details = x509_to_cert_details(cert.as_ref());
+
+        assert_eq!(details.common_name, "leaf.example.com");
+        assert_eq!(details.issuer, "Test Intermediate");
+        assert_eq!(details.public_key_bits, 2048);
+        assert_eq!(details.signature_algorithm, "sha256WithRSAEncryption");
+        assert!(!details.serial_number.is_empty());
+        assert_ne!(details.serial_number, "Unknown");
+        assert!(details.sha1_fingerprint.contains(':'));
+        assert!(details.sha256_fingerprint.contains(':'));
     }
 }

@@ -4,9 +4,10 @@ mod workflow;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use cliclack::{confirm, input, intro, outro, password, select};
+use cliclack::{clear_screen, confirm, input, intro, outro, password, select};
 use crossterm::style::{Color, Stylize};
 use dotenvy::dotenv;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use ssl_toolbox_core::{ConfigInputs, CsrDefaults};
@@ -547,6 +548,17 @@ fn execute_ca_command(
     Ok(())
 }
 
+fn pause_for_menu_return() -> Result<()> {
+    println!();
+    print!("{}", "Press Enter to return to the menu...".dark_grey());
+    io::stdout().flush()?;
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    clear_screen()?;
+    Ok(())
+}
+
 fn run_interactive_menu(debug: bool) -> Result<()> {
     #[cfg(not(feature = "sectigo"))]
     let _ = debug;
@@ -565,28 +577,30 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
         print_dashboard(&app_config.ui_state, &workspace);
         print_main_menu(&menu);
         let selection = prompt_main_menu_choice(&menu, &mut app_config.ui_state)?;
+        let mut should_pause = false;
 
         match selection {
             -1 => continue,
             -2 => {
                 replay_recent_job(&mut app_config.ui_state, debug, false)?;
-                continue;
+                should_pause = true;
             }
             -3 => {
                 replay_recent_job(&mut app_config.ui_state, debug, true)?;
-                continue;
+                should_pause = true;
             }
             -4 => {
+                clear_screen()?;
                 print_recent_jobs(&app_config.ui_state);
-                continue;
+                should_pause = true;
             }
             -5 => {
+                clear_screen()?;
                 print_workspace_overview(&workspace);
-                continue;
+                should_pause = true;
             }
             -6 => {
                 select_active_profile(&mut app_config.ui_state)?;
-                continue;
             }
             0 => {
                 let conf = prompt_path(
@@ -621,12 +635,14 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
 
                 let pass: String = password("Enter password for private key").interact()?;
                 ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
+                clear_screen()?;
                 println!(
                     "Success: Generated {} and {}",
                     display_path(&key),
                     display_path(&csr)
                 );
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             1 => {
                 let key = prompt_path(
@@ -707,6 +723,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         key_pass_opt,
                         &pfx_pass,
                     )?;
+                    clear_screen()?;
                     println!("Success: Legacy PFX created at {}", display_path(&out));
                 } else {
                     ssl_toolbox_core::pfx::create_pfx(
@@ -717,9 +734,11 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         key_pass_opt,
                         &pfx_pass,
                     )?;
+                    clear_screen()?;
                     println!("Success: PFX created at {}", display_path(&out));
                 }
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             2 => {
                 let input_path = prompt_path(
@@ -754,11 +773,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     &out,
                     &output_pass,
                 )?;
+                clear_screen()?;
                 println!(
                     "Success: Legacy PFX (TripleDES-SHA1) created at {}",
                     display_path(&out)
                 );
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             3 => {
                 let inputs = prompt_config_inputs(
@@ -780,11 +801,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 );
                 show_preview_and_confirm(&job)?;
                 ssl_toolbox_core::config::generate_conf_from_inputs(&inputs, &output_path)?;
+                clear_screen()?;
                 println!(
                     "Success: OpenSSL config written to {}",
                     display_path(&output_path)
                 );
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             4 => {
                 let input_path = prompt_path(
@@ -812,8 +835,10 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     &out,
                     is_csr,
                 )?;
+                clear_screen()?;
                 println!("Success: OpenSSL config written to {}", display_path(&out));
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             5 => {
                 let input_path = prompt_path(
@@ -822,6 +847,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Path to certificate file (.crt, .cer, .pem)",
                     None,
                 )?;
+                clear_screen()?;
                 let success = match std::fs::read(&input_path) {
                     Ok(cert_content) => {
                         display::display_cert_chain(&cert_content, "Certificate Details");
@@ -841,6 +867,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .with_input("cert", input_path),
                     success,
                 );
+                should_pause = true;
             }
             6 => {
                 let input_path = prompt_path(
@@ -849,6 +876,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     "Path to CSR file (.csr)",
                     None,
                 )?;
+                clear_screen()?;
                 println!("\n╔═══════════════════════════════════════════════════════════════╗");
                 println!("║                        CSR Details                           ║");
                 println!("╚═══════════════════════════════════════════════════════════════╝\n");
@@ -880,6 +908,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .with_input("csr", input_path),
                     success,
                 );
+                should_pause = true;
             }
             7 => {
                 let input_path = prompt_path(
@@ -889,6 +918,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     None,
                 )?;
                 let pfx_pass: String = password("Enter PFX password").interact()?;
+                clear_screen()?;
                 let success = match std::fs::read(&input_path) {
                     Ok(pfx_bytes) => {
                         match ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass) {
@@ -916,6 +946,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .with_input("pfx", input_path),
                     success,
                 );
+                should_pause = true;
             }
             8 => {
                 let host: String = input("Hostname (e.g. example.com)").interact()?;
@@ -925,6 +956,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .initial_value(true)
                     .interact()?;
 
+                clear_screen()?;
                 println!("\nConnecting to {}:{}...", host, port);
                 let success = match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
                     Ok(result) => {
@@ -946,6 +978,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .with_input("port", port.to_string()),
                     success,
                 );
+                should_pause = true;
             }
             9 => {
                 let host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
@@ -955,6 +988,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .initial_value(true)
                     .interact()?;
 
+                clear_screen()?;
                 println!("\nConnecting to {}:{}...", host, port);
                 let success = match ssl_toolbox_core::tls::connect_and_check(&host, port, verify) {
                     Ok(result) => {
@@ -976,6 +1010,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .with_input("port", port.to_string()),
                     success,
                 );
+                should_pause = true;
             }
             10 => {
                 let host: String = input("SMTP hostname (e.g. smtp.gmail.com)").interact()?;
@@ -985,6 +1020,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .initial_value(true)
                     .interact()?;
 
+                clear_screen()?;
                 println!("\nConnecting to {}:{}...", host, port);
                 let success =
                     match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
@@ -1010,6 +1046,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .with_input("port", port.to_string()),
                     success,
                 );
+                should_pause = true;
             }
             11 => {
                 let format: String = select("Target format")
@@ -1050,14 +1087,17 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 match format.as_str() {
                     "der" => {
                         ssl_toolbox_core::convert::pem_to_der(&input_path, &output_path)?;
+                        clear_screen()?;
                         println!("Success: Converted to DER: {}", display_path(&output_path));
                     }
                     "pem" => {
                         ssl_toolbox_core::convert::der_to_pem(&input_path, &output_path)?;
+                        clear_screen()?;
                         println!("Success: Converted to PEM: {}", display_path(&output_path));
                     }
                     "base64" => {
                         ssl_toolbox_core::convert::pem_to_base64(&input_path, &output_path)?;
+                        clear_screen()?;
                         println!(
                             "Success: Converted to Base64: {}",
                             display_path(&output_path)
@@ -1066,6 +1106,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     _ => unreachable!(),
                 }
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             12 => {
                 let input_path = prompt_path(
@@ -1077,6 +1118,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let data = std::fs::read(&input_path)?;
                 let format = ssl_toolbox_core::convert::detect_format(&data);
                 let desc = ssl_toolbox_core::convert::format_description(format);
+                clear_screen()?;
                 println!("\nFile: {}", display_path(&input_path));
                 println!("Format: {}", desc);
                 finalize_job(
@@ -1087,6 +1129,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     )
                     .with_input("input", input_path),
                 );
+                should_pause = true;
             }
             #[cfg(feature = "sectigo")]
             13 => {
@@ -1126,7 +1169,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     let profiles = plugin.list_profiles(debug)?;
 
                     if profiles.is_empty() {
+                        clear_screen()?;
                         eprintln!("No SSL profiles available");
+                        pause_for_menu_return()?;
                         continue;
                     }
 
@@ -1161,7 +1206,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         let confirm_result =
                             confirm("Do you want to continue with enrollment?").interact()?;
                         if !confirm_result {
+                            clear_screen()?;
                             println!("Enrollment cancelled.");
+                            pause_for_menu_return()?;
                             continue;
                         }
                     }
@@ -1181,6 +1228,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
 
                 let request_id = plugin.submit_csr(&csr_content, &options, debug)?;
 
+                clear_screen()?;
                 println!("Waiting 20 seconds for certificate to be processed...");
                 std::thread::sleep(std::time::Duration::from_secs(20));
 
@@ -1197,10 +1245,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 );
                 println!("Success: Certificate saved to {}", display_path(&out));
                 finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
             }
             #[cfg(feature = "sectigo")]
             14 => {
                 let plugin = get_ca_plugin(debug)?;
+                clear_screen()?;
                 match plugin.list_profiles(debug) {
                     Ok(profiles) => {
                         if profiles.is_empty() {
@@ -1234,8 +1284,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         eprintln!("Error fetching SSL profiles: {}", e);
                     }
                 }
+                should_pause = true;
             }
             _ => break,
+        }
+
+        if should_pause {
+            pause_for_menu_return()?;
         }
     }
 
@@ -2309,6 +2364,7 @@ fn replay_generate(state: &mut settings::UiState, job: &JobRecord, clone: bool) 
     show_preview_and_confirm(&replay_job)?;
     let pass: String = password("Enter password for private key").interact()?;
     ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
+    clear_screen()?;
     println!(
         "Success: Generated {} and {}",
         display_path(&key),
@@ -2369,6 +2425,7 @@ fn replay_pfx(
         let output_pass: String = password("Enter password for output PFX").interact()?;
         let pfx_bytes = std::fs::read(&key)?;
         ssl_toolbox_core::pfx::create_pfx_legacy_3des(&pfx_bytes, &input_pass, &out, &output_pass)?;
+        clear_screen()?;
         println!(
             "Success: Legacy PFX (TripleDES-SHA1) created at {}",
             display_path(&out)
@@ -2450,6 +2507,7 @@ fn replay_pfx(
             &pfx_pass,
         )?;
     }
+    clear_screen()?;
     println!(
         "Success: {} created at {}",
         if legacy { "Legacy PFX" } else { "PFX" },
@@ -2488,6 +2546,7 @@ fn replay_new_config(state: &mut settings::UiState, job: &JobRecord, clone: bool
     let replay_job = build_new_config_job(&out, job.profile.as_deref(), Some(&inputs));
     show_preview_and_confirm(&replay_job)?;
     ssl_toolbox_core::config::generate_conf_from_inputs(&inputs, &out)?;
+    clear_screen()?;
     println!("Success: OpenSSL config written to {}", display_path(&out));
     finalize_job(state, replay_job);
     Ok(())
@@ -2527,6 +2586,7 @@ fn replay_config_from_existing(
     show_preview_and_confirm(&replay_job)?;
     let is_csr = source.ends_with(".csr");
     ssl_toolbox_core::config::generate_conf_from_cert_or_csr(&source, &out, is_csr)?;
+    clear_screen()?;
     println!("Success: OpenSSL config written to {}", display_path(&out));
     finalize_job(state, replay_job);
     Ok(())
@@ -2544,6 +2604,7 @@ fn replay_view_cert(state: &mut settings::UiState, job: &JobRecord, clone: bool)
         seeded_value(job, "cert").ok_or_else(|| anyhow::anyhow!("Missing certificate path"))?
     };
     let cert_content = std::fs::read(&cert)?;
+    clear_screen()?;
     display::display_cert_chain(&cert_content, "Certificate Details");
     finalize_job(
         state,
@@ -2568,6 +2629,7 @@ fn replay_view_csr(state: &mut settings::UiState, job: &JobRecord, clone: bool) 
         seeded_value(job, "csr").ok_or_else(|| anyhow::anyhow!("Missing CSR path"))?
     };
     let (cn, sans) = ssl_toolbox_core::key_csr::extract_csr_details(&csr)?;
+    clear_screen()?;
     println!("CommonName: {}", cn);
     for san in sans {
         println!("  {}", san);
@@ -2597,6 +2659,7 @@ fn replay_view_pfx(state: &mut settings::UiState, job: &JobRecord, clone: bool) 
     let pfx_pass: String = password("Enter PFX password").interact()?;
     let pfx_bytes = std::fs::read(&pfx)?;
     let cert_chain = ssl_toolbox_core::pfx::extract_pfx_details(&pfx_bytes, &pfx_pass)?;
+    clear_screen()?;
     display::display_cert_details_list(&cert_chain, "PFX Contents");
     finalize_job(
         state,
@@ -2665,6 +2728,8 @@ fn replay_verify_endpoint(
     let verify = confirm("Validate certificate?")
         .initial_value(true)
         .interact()?;
+    clear_screen()?;
+    println!("\nConnecting to {}:{}...", host, port);
     match kind {
         ActionKind::VerifyHttps | ActionKind::VerifyLdaps => {
             let result = ssl_toolbox_core::tls::connect_and_check(&host, port, verify)?;
@@ -2714,6 +2779,7 @@ fn replay_convert(state: &mut settings::UiState, job: &JobRecord, clone: bool) -
         "pem" => ssl_toolbox_core::convert::der_to_pem(&input_path, &output_path)?,
         _ => ssl_toolbox_core::convert::pem_to_base64(&input_path, &output_path)?,
     }
+    clear_screen()?;
     println!(
         "Success: Converted artifact saved to {}",
         display_path(&output_path)
@@ -2735,6 +2801,7 @@ fn replay_identify(state: &mut settings::UiState, job: &JobRecord, clone: bool) 
     };
     let data = std::fs::read(&input_path)?;
     let format = ssl_toolbox_core::convert::detect_format(&data);
+    clear_screen()?;
     println!(
         "Format: {}",
         ssl_toolbox_core::convert::format_description(format)
@@ -2790,6 +2857,8 @@ fn replay_ca_submit(
         },
         debug,
     )?;
+    clear_screen()?;
+    println!("Waiting 20 seconds for certificate to be processed...");
     std::thread::sleep(std::time::Duration::from_secs(20));
     let cert_content =
         plugin.collect_cert(&request_id, ssl_toolbox_ca::CollectFormat::PemCert, debug)?;

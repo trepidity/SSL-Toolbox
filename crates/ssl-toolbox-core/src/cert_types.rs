@@ -7,6 +7,11 @@ pub struct CertDetails {
     pub not_before: String,
     pub not_after: String,
     pub issuer: String,
+    pub signature_algorithm: String,
+    pub public_key_bits: u32,
+    pub serial_number: String,
+    pub sha1_fingerprint: String,
+    pub sha256_fingerprint: String,
 }
 
 #[derive(Debug, Clone)]

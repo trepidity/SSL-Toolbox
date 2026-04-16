@@ -1,5 +1,23 @@
 use ssl_toolbox_core::{CertDetails, CertValidation, TlsCheckResult};
 
+fn print_cert_detail_lines(prefix: &str, details: &CertDetails) {
+    println!("{prefix}  CommonName: {}", details.common_name);
+    println!("{prefix}  Issuer: {}", details.issuer);
+    println!("{prefix}  Serial Number: {}", details.serial_number);
+    println!(
+        "{prefix}  Signature Algorithm: {}",
+        details.signature_algorithm
+    );
+    println!("{prefix}  Public Key Bits: {}", details.public_key_bits);
+    println!("{prefix}  Valid From: {}", details.not_before);
+    println!("{prefix}  Valid Until: {}", details.not_after);
+    println!("{prefix}  SHA1 Fingerprint: {}", details.sha1_fingerprint);
+    println!(
+        "{prefix}  SHA256 Fingerprint: {}",
+        details.sha256_fingerprint
+    );
+}
+
 /// Display certificate chain details from raw certificate file content.
 pub fn display_cert_chain(cert_content: &[u8], title: &str) {
     match ssl_toolbox_core::x509_utils::extract_cert_chain_details(cert_content) {
@@ -20,10 +38,7 @@ pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
         println!("╚═══════════════════════════════════════════════════════════════╝\n");
 
         let details = &cert_chain[0];
-        println!("  CommonName: {}", details.common_name);
-        println!("  Issuer: {}", details.issuer);
-        println!("  Valid From: {}", details.not_before);
-        println!("  Valid Until: {}", details.not_after);
+        print_cert_detail_lines("", details);
 
         if details.sans.is_empty() {
             println!("  SANs: None");
@@ -56,10 +71,7 @@ pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
                 idx + 1,
                 cert_type
             );
-            println!("│  CommonName: {}", details.common_name);
-            println!("│  Issuer: {}", details.issuer);
-            println!("│  Valid From: {}", details.not_before);
-            println!("│  Valid Until: {}", details.not_after);
+            print_cert_detail_lines("│", details);
 
             if !details.sans.is_empty() {
                 println!("│  SANs:");

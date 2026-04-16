@@ -165,6 +165,11 @@ fn pfx_outputs_are_accepted_by_openssl_and_keytool() -> Result<(), Box<dyn Error
     assert_eq!(details.len(), 2);
     assert_eq!(details[0].common_name, "svc.example.test");
     assert_eq!(details[1].common_name, "SSL Toolbox Test Root CA");
+    assert_eq!(details[0].public_key_bits, 2048);
+    assert_eq!(details[0].signature_algorithm, "sha256WithRSAEncryption");
+    assert!(!details[0].serial_number.is_empty());
+    assert!(details[0].sha1_fingerprint.contains(':'));
+    assert!(details[0].sha256_fingerprint.contains(':'));
     assert_eq!(detect_format(&fs::read(&pfx)?), CertFormat::Pkcs12);
 
     let openssl_leaf = run_command(
