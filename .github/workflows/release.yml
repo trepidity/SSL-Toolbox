@@ -38,7 +38,7 @@ jobs:
             binary_name: ssl-toolbox
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -87,7 +87,7 @@ jobs:
           "ARCHIVE=$archiveName.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ssl-toolbox-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
@@ -100,7 +100,7 @@ jobs:
       contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true

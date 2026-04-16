@@ -554,12 +554,17 @@ pub fn path_suggestions(
 
     for file in &workspace.files {
         if preferred_kind.is_none_or(|kind| kind == file.kind) {
-            let display = file.path.display().to_string();
+            let display = file.path.display().to_string().replace('\\', "/");
             push_suggestion(
                 &mut ordered,
                 &mut seen,
                 &display,
-                &workspace.root.join(&file.path).display().to_string(),
+                &workspace
+                    .root
+                    .join(&file.path)
+                    .display()
+                    .to_string()
+                    .replace('\\', "/"),
             );
         }
     }
@@ -633,7 +638,7 @@ pub fn suggest_output_path(base_input: &str, target: ArtifactKind) -> Option<Str
         ArtifactKind::LegacyPfx => format!("{stem}.legacy.pfx"),
     };
 
-    Some(parent.join(file_name).display().to_string())
+    Some(parent.join(file_name).display().to_string().replace('\\', "/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
