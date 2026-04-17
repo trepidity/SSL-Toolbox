@@ -136,6 +136,8 @@ For detailed usage of every command, see [docs/USER_MANUAL.md](docs/USER_MANUAL.
 
 ## Architecture
 
+ssl-toolbox is a Cargo workspace of four crates:
+
 ```
 ssl-toolbox (workspace)
   crates/
@@ -145,7 +147,7 @@ ssl-toolbox (workspace)
     ssl-toolbox-ca-sectigo/ Sectigo SCM implementation (feature-gated)
 ```
 
-The `sectigo` feature is on by default. Disable it with `--no-default-features` for a standalone tool with no CA dependencies.
+[ARCHITECTURE.md](ARCHITECTURE.md) is the authoritative technical spec for all design and behavioral details -- crate boundaries, configuration model, TLS/PFX contracts, the CA plugin trait, and the threat model. The `sectigo` feature is on by default; disable it with `--no-default-features` for a standalone build with no CA dependencies.
 
 ## Development
 
@@ -159,6 +161,27 @@ cargo build --release -p ssl-toolbox             # release binary
 This repo includes a `.githooks/pre-push` hook that runs `cargo clippy --workspace -- -D warnings`.
 Enable it locally with `git config core.hooksPath .githooks`.
 
+## Documentation Flow
+
+```
+ARCHITECTURE.md (spec) -> Tests (encode spec) -> Code (satisfies tests)
+```
+
+[ARCHITECTURE.md](ARCHITECTURE.md) is the authoritative technical schematic -- the single source of truth for how ssl-toolbox works. Every feature and behavioral change must be documented there **before or alongside** the code change. Tests are written against ARCHITECTURE.md, and code is written to pass the tests.
+
+> **If it's not in ARCHITECTURE.md, it doesn't have a spec. If it doesn't have a spec, it can't have tests. If it can't have tests, it doesn't ship.**
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the TDD workflow, issue requirements, PR gates, and CHANGELOG format.
+
 ## License
 
 MIT OR Apache-2.0
+
+## See Also
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- authoritative technical spec (crates, config, TLS, PFX, CA plugins, threat model)
+- [CONTRIBUTING.md](CONTRIBUTING.md) -- TDD workflow, PR requirements, CHANGELOG format
+- [CHANGELOG.md](CHANGELOG.md) -- release history and notable changes
+- [docs/USER_MANUAL.md](docs/USER_MANUAL.md) -- detailed command-by-command usage guide
