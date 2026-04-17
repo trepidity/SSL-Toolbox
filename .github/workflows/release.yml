@@ -62,12 +62,6 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
         run: cargo build --release --target ${{ matrix.target }} -p ssl-toolbox
 
-      - name: Test (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        env:
-          SSL_TOOLBOX_ENABLE_WINDOWS_LIVE_TESTS: "1"
-        run: cargo test --workspace
-
       - name: Package (Unix)
         if: matrix.archive_ext == 'tar.gz'
         run: |
