@@ -331,6 +331,7 @@ Verify the TLS certificate and connection for an HTTPS endpoint.
 ssl-toolbox verify-https --host example.com
 ssl-toolbox verify-https --host example.com --port 8443
 ssl-toolbox verify-https --host example.com --no-verify
+ssl-toolbox verify-https --host example.com --out verify-https.txt
 ```
 
 | Flag | Required | Description |
@@ -338,6 +339,8 @@ ssl-toolbox verify-https --host example.com --no-verify
 | `--host`, `-H` | Yes | Hostname to connect to |
 | `--port`, `-p` | No | Port number (default: 443) |
 | `--no-verify` | No | Skip certificate validation (still shows cert details) |
+| `--full-scan` | No | Probe each protocol version against the locally testable cipher-suite set |
+| `--out`, `-o` | No | Save the verification report to a file |
 
 **Output includes:**
 - Negotiated protocol version and cipher suite
@@ -359,6 +362,7 @@ Verify the TLS certificate for an LDAPS endpoint. Same behavior and flags as [ve
 ```bash
 ssl-toolbox verify-ldaps --host ldap.example.com
 ssl-toolbox verify-ldaps --host ldap.example.com --port 3269
+ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
 ```
 
 | Flag | Required | Description |
@@ -366,6 +370,8 @@ ssl-toolbox verify-ldaps --host ldap.example.com --port 3269
 | `--host`, `-H` | Yes | LDAP server hostname |
 | `--port`, `-p` | No | Port number (default: 636) |
 | `--no-verify` | No | Skip certificate validation |
+| `--full-scan` | No | Probe each protocol version against the locally testable cipher-suite set |
+| `--out`, `-o` | No | Save the verification report to a file |
 
 ### verify-smtp
 
@@ -374,6 +380,7 @@ Verify a TLS certificate via SMTP STARTTLS.
 ```bash
 ssl-toolbox verify-smtp --host smtp.example.com
 ssl-toolbox verify-smtp --host smtp.example.com --port 25
+ssl-toolbox verify-smtp --host smtp.example.com --out verify-smtp.txt
 ```
 
 | Flag | Required | Description |
@@ -381,6 +388,7 @@ ssl-toolbox verify-smtp --host smtp.example.com --port 25
 | `--host`, `-H` | Yes | SMTP server hostname |
 | `--port`, `-p` | No | Port number (default: 587) |
 | `--no-verify` | No | Skip certificate validation |
+| `--out`, `-o` | No | Save the verification report to a file |
 
 Unlike `verify-https` and `verify-ldaps`, this command speaks the SMTP protocol: it connects on plaintext, sends EHLO, checks for STARTTLS support, and upgrades the connection before extracting TLS details.
 
