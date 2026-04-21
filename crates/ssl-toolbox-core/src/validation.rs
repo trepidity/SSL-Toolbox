@@ -2,9 +2,12 @@ use openssl::ssl::SslRef;
 use openssl::stack::Stack;
 use openssl::x509::X509StoreContext;
 use openssl::x509::store::X509StoreBuilder;
+use std::sync::Once;
 
-use crate::x509_utils::collect_peer_chain;
+use crate::x509_utils::collect_peer_untrusted_chain;
 use crate::{CertValidation, ValidationResult};
+
+static OPENSSL_CERT_ENV_INIT: Once = Once::new();
 
 /// Check if a hostname matches a pattern (supports wildcard matching).
 fn hostname_matches(pattern: &str, hostname: &str) -> bool {
@@ -151,13 +154,16 @@ fn validate_chain(ssl: &SslRef) -> ValidationResult {
         }
     };
 
-    // `peer_cert_chain()` on the client side includes the leaf certificate.
-    // Normalize the chain first so we don't pass the leaf twice to OpenSSL.
-    let normalized_chain = collect_peer_chain(ssl);
+    // The verification context expects only untrusted intermediates here. The leaf is passed
+    // separately, and servers sometimes send the self-signed root as well. Feeding the trust
+    // anchor back into the untrusted stack can cause false verification failures.
+    let normalized_chain = collect_peer_untrusted_chain(ssl);
     let mut chain = Stack::new().unwrap();
-    for cert in normalized_chain.into_iter().skip(1) {
+    for cert in normalized_chain {
         let _ = chain.push(cert);
     }
+
+    initialize_openssl_cert_env();
 
     // Build trust store using system default paths
     let store = match X509StoreBuilder::new() {
@@ -181,15 +187,18 @@ fn validate_chain(ssl: &SslRef) -> ValidationResult {
     match X509StoreContext::new() {
         Ok(mut ctx) => {
             match ctx.init(&store, &cert, &chain, |ctx| {
-                Ok(ctx.verify_cert().unwrap_or(false))
+                let verified = ctx.verify_cert()?;
+                let error = ctx.error();
+                let error_depth = ctx.error_depth();
+                Ok((verified, error, error_depth))
             }) {
-                Ok(true) => ValidationResult {
+                Ok((true, _, _)) => ValidationResult {
                     passed: true,
                     message: "chain verified against system trust store".to_string(),
                 },
-                Ok(false) => ValidationResult {
+                Ok((false, error, depth)) => ValidationResult {
                     passed: false,
-                    message: "chain verification failed".to_string(),
+                    message: format!("{} (depth {})", error.error_string(), depth),
                 },
                 Err(_) => ValidationResult {
                     passed: false,
@@ -202,6 +211,16 @@ fn validate_chain(ssl: &SslRef) -> ValidationResult {
             message: "Failed to create store context".to_string(),
         },
     }
+}
+
+fn initialize_openssl_cert_env() {
+    OPENSSL_CERT_ENV_INIT.call_once(|| {
+        // OpenSSL in the vendored Rust build does not automatically discover the platform trust
+        // store everywhere. Probe once and populate SSL_CERT_FILE / SSL_CERT_DIR for this process.
+        unsafe {
+            let _ = openssl_probe::try_init_openssl_env_vars();
+        }
+    });
 }
 
 #[cfg(test)]

@@ -1281,6 +1281,7 @@ version = "2.0.1"
 dependencies = [
  "anyhow",
  "openssl",
+ "openssl-probe",
  "serde",
  "serde_json",
 ]

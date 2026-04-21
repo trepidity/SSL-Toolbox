@@ -4,9 +4,15 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
-## [Unreleased]
+## v2.0.2 — 2026-04-21
 
-_No unreleased changes yet._
+### feat: save verify reports to file
+
+Added `--out` support to `verify-https`, `verify-ldaps`, and `verify-smtp` so the rendered verification report can be written directly to disk in the same format shown in the terminal.
+
+### fix: align manual chain validation with system trust store
+
+Adjusted post-handshake certificate validation to ignore server-sent self-signed roots in the untrusted stack and initialize OpenSSL trust-store discovery via `openssl-probe`. This resolves false chain verification failures seen in HTTPS and LDAPS while matching `openssl s_client` behavior.
 
 ---
 

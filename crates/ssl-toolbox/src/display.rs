@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use ssl_toolbox_core::{
     CertDetails, CertValidation, PfxDetails, PrivateKeySummary, TlsCheckResult,
 };
@@ -164,35 +166,68 @@ pub fn display_pfx_details(details: &PfxDetails, title: &str) {
 
 /// Display TLS check results with connection, version support, and certificate chain.
 pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
-    println!("\n╔═══════════════════════════════════════════════════════════════╗");
-    println!("║  {:^59}  ║", label);
-    println!("╚═══════════════════════════════════════════════════════════════╝\n");
+    print!("{}", render_tls_check_result(result, label));
+}
 
-    println!("  Endpoint: {}:{}", result.host, result.port);
-    println!();
+pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
+    let mut output = String::new();
 
-    // Negotiated connection info
-    println!("┌─ Negotiated Connection ─────────────────────────────────────");
-    println!("│  Protocol:     {}", result.cipher.protocol);
-    println!("│  Cipher Suite: {}", result.cipher.name);
-    println!("│  Cipher Bits:  {}", result.cipher.bits);
-    println!("└────────────────────────────────────────────────────────────────\n");
+    writeln!(
+        &mut output,
+        "\n╔═══════════════════════════════════════════════════════════════╗"
+    )
+    .unwrap();
+    writeln!(&mut output, "║  {:^59}  ║", label).unwrap();
+    writeln!(
+        &mut output,
+        "╚═══════════════════════════════════════════════════════════════╝\n"
+    )
+    .unwrap();
 
-    // TLS version support
+    writeln!(&mut output, "  Endpoint: {}:{}", result.host, result.port).unwrap();
+    writeln!(&mut output).unwrap();
+
+    writeln!(
+        &mut output,
+        "┌─ Negotiated Connection ─────────────────────────────────────"
+    )
+    .unwrap();
+    writeln!(&mut output, "│  Protocol:     {}", result.cipher.protocol).unwrap();
+    writeln!(&mut output, "│  Cipher Suite: {}", result.cipher.name).unwrap();
+    writeln!(&mut output, "│  Cipher Bits:  {}", result.cipher.bits).unwrap();
+    writeln!(
+        &mut output,
+        "└────────────────────────────────────────────────────────────────\n"
+    )
+    .unwrap();
+
     if !result.version_support.is_empty() {
-        println!("┌─ TLS Version Support ───────────────────────────────────────");
+        writeln!(
+            &mut output,
+            "┌─ TLS Version Support ───────────────────────────────────────"
+        )
+        .unwrap();
         for probe in &result.version_support {
             let status = if probe.supported { "Yes" } else { "No" };
             let marker = if probe.supported { "+" } else { "-" };
-            println!("│  [{}] {}: {}", marker, probe.label, status);
+            writeln!(&mut output, "│  [{}] {}: {}", marker, probe.label, status).unwrap();
         }
-        println!("└────────────────────────────────────────────────────────────────\n");
+        writeln!(
+            &mut output,
+            "└────────────────────────────────────────────────────────────────\n"
+        )
+        .unwrap();
     }
 
     if !result.cipher_scan.is_empty() {
-        println!("┌─ Full Protocol / Cipher Scan ───────────────────────────────");
+        writeln!(
+            &mut output,
+            "┌─ Full Protocol / Cipher Scan ───────────────────────────────"
+        )
+        .unwrap();
         for protocol in &result.cipher_scan {
-            println!(
+            writeln!(
+                &mut output,
                 "│  {}: {}/{} locally testable cipher suite{} supported",
                 protocol.protocol,
                 protocol.supported_ciphers.len(),
@@ -202,29 +237,33 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
                 } else {
                     "s"
                 }
-            );
+            )
+            .unwrap();
 
             if protocol.supported_ciphers.is_empty() {
-                println!("│    None detected");
+                writeln!(&mut output, "│    None detected").unwrap();
             } else {
                 for cipher in &protocol.supported_ciphers {
-                    println!("│    • {} ({} bits)", cipher.name, cipher.bits);
+                    writeln!(&mut output, "│    • {} ({} bits)", cipher.name, cipher.bits).unwrap();
                 }
             }
         }
-        println!("└────────────────────────────────────────────────────────────────\n");
+        writeln!(
+            &mut output,
+            "└────────────────────────────────────────────────────────────────\n"
+        )
+        .unwrap();
     }
 
-    // Certificate validation
     if let Some(validation) = &result.validation {
-        display_validation(validation);
+        render_validation(validation, &mut output);
     }
 
-    // Certificate chain
     if result.cert_chain.is_empty() {
-        println!("  No certificates presented by server.\n");
+        writeln!(&mut output, "  No certificates presented by server.\n").unwrap();
     } else {
-        println!(
+        writeln!(
+            &mut output,
             "┌─ Certificate Chain ({} cert{}) ──────────────────────────────",
             result.cert_chain.len(),
             if result.cert_chain.len() == 1 {
@@ -232,8 +271,9 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
             } else {
                 "s"
             }
-        );
-        println!("│");
+        )
+        .unwrap();
+        writeln!(&mut output, "│").unwrap();
 
         for (idx, details) in result.cert_chain.iter().enumerate() {
             let cert_type = if idx == 0 {
@@ -244,56 +284,134 @@ pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
                 "Intermediate Certificate"
             };
 
-            println!("│  ── Certificate #{} - {} ──", idx + 1, cert_type);
-            println!("│     CommonName:  {}", details.common_name);
-            println!("│     Issuer:      {}", details.issuer);
-            println!("│     Valid From:  {}", details.not_before);
-            println!("│     Valid Until: {}", details.not_after);
+            writeln!(
+                &mut output,
+                "│  ── Certificate #{} - {} ──",
+                idx + 1,
+                cert_type
+            )
+            .unwrap();
+            writeln!(&mut output, "│     CommonName:  {}", details.common_name).unwrap();
+            writeln!(&mut output, "│     Issuer:      {}", details.issuer).unwrap();
+            writeln!(&mut output, "│     Valid From:  {}", details.not_before).unwrap();
+            writeln!(&mut output, "│     Valid Until: {}", details.not_after).unwrap();
 
             if !details.sans.is_empty() {
-                println!("│     SANs:");
+                writeln!(&mut output, "│     SANs:").unwrap();
                 for san in &details.sans {
-                    println!("│       • {}", san);
+                    writeln!(&mut output, "│       • {}", san).unwrap();
                 }
             }
 
             if idx < result.cert_chain.len() - 1 {
-                println!("│");
+                writeln!(&mut output, "│").unwrap();
             }
         }
-        println!("└────────────────────────────────────────────────────────────────\n");
+        writeln!(
+            &mut output,
+            "└────────────────────────────────────────────────────────────────\n"
+        )
+        .unwrap();
     }
+
+    output
 }
 
-fn display_validation(validation: &CertValidation) {
-    println!("┌─ Certificate Validation ────────────────────────────────────");
+fn render_validation(validation: &CertValidation, output: &mut String) {
+    writeln!(
+        output,
+        "┌─ Certificate Validation ────────────────────────────────────"
+    )
+    .unwrap();
 
     if let Some(ref hostname) = validation.hostname_match {
         let marker = if hostname.passed { "+" } else { "-" };
         let label = if hostname.passed { "Pass" } else { "FAIL" };
-        println!(
+        writeln!(
+            output,
             "│  [{}] Hostname Match: {} ({})",
             marker, label, hostname.message
-        );
+        )
+        .unwrap();
     }
 
     if let Some(ref expiry) = validation.expiry_check {
         let marker = if expiry.passed { "+" } else { "-" };
         let label = if expiry.passed { "Pass" } else { "FAIL" };
-        println!(
+        writeln!(
+            output,
             "│  [{}] Expiry Check:   {} ({})",
             marker, label, expiry.message
-        );
+        )
+        .unwrap();
     }
 
     if let Some(ref chain) = validation.chain_valid {
         let marker = if chain.passed { "+" } else { "-" };
         let label = if chain.passed { "Pass" } else { "FAIL" };
-        println!(
+        writeln!(
+            output,
             "│  [{}] Chain Valid:     {} ({})",
             marker, label, chain.message
-        );
+        )
+        .unwrap();
     }
 
-    println!("└────────────────────────────────────────────────────────────────\n");
+    writeln!(
+        output,
+        "└────────────────────────────────────────────────────────────────\n"
+    )
+    .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ssl_toolbox_core::{CipherInfo, TlsVersionProbeResult, ValidationResult};
+
+    #[test]
+    fn render_tls_check_result_includes_key_sections() {
+        let result = TlsCheckResult {
+            host: "example.com".to_string(),
+            port: 443,
+            cipher: CipherInfo {
+                name: "TLS_AES_256_GCM_SHA384".to_string(),
+                bits: 256,
+                protocol: "TLSv1.3".to_string(),
+            },
+            cert_chain: vec![CertDetails {
+                common_name: "example.com".to_string(),
+                sans: vec!["example.com".to_string(), "www.example.com".to_string()],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2027-01-01T00:00:00Z".to_string(),
+                issuer: "Example Issuer".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 2048,
+                serial_number: "01".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            }],
+            version_support: vec![TlsVersionProbeResult {
+                label: "TLS 1.3".to_string(),
+                supported: true,
+            }],
+            cipher_scan: vec![],
+            validation: Some(CertValidation {
+                hostname_match: Some(ValidationResult {
+                    passed: true,
+                    message: "matched".to_string(),
+                }),
+                expiry_check: None,
+                chain_valid: None,
+            }),
+        };
+
+        let rendered = render_tls_check_result(&result, "HTTPS Endpoint Verification");
+
+        assert!(rendered.contains("HTTPS Endpoint Verification"));
+        assert!(rendered.contains("Endpoint: example.com:443"));
+        assert!(rendered.contains("TLS Version Support"));
+        assert!(rendered.contains("Certificate Validation"));
+        assert!(rendered.contains("Certificate Chain (1 cert)"));
+    }
 }

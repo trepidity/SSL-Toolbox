@@ -2,7 +2,7 @@ mod display;
 mod settings;
 mod workflow;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cliclack::{clear_screen, confirm, input, intro, outro, password, select};
 use crossterm::{
@@ -122,6 +122,9 @@ enum Commands {
         /// Probe each protocol version against the locally testable cipher-suite set
         #[arg(long)]
         full_scan: bool,
+        /// Save results to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// Verify TLS certificate and protocol for an LDAPS endpoint
     VerifyLdaps {
@@ -135,6 +138,9 @@ enum Commands {
         /// Probe each protocol version against the locally testable cipher-suite set
         #[arg(long)]
         full_scan: bool,
+        /// Save results to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// Verify TLS certificate via SMTP STARTTLS
     VerifySmtp {
@@ -145,6 +151,9 @@ enum Commands {
         /// Skip certificate validation
         #[arg(long)]
         no_verify: bool,
+        /// Save results to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// Initialize config files in .ssl-toolbox/ directory
     Init {
@@ -385,6 +394,7 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             port,
             no_verify,
             full_scan,
+            out,
         } => {
             let (host, port) = normalize_tls_endpoint_target(&host, port, 443)?;
             println!(
@@ -395,7 +405,12 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             let verify = !no_verify;
             match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
                 Ok(result) => {
-                    display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
+                    let report =
+                        display::render_tls_check_result(&result, "HTTPS Endpoint Verification");
+                    print!("{report}");
+                    if let Some(path) = out.as_deref() {
+                        write_verify_results(path, &report)?;
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -407,6 +422,7 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             port,
             no_verify,
             full_scan,
+            out,
         } => {
             let (host, port) = normalize_tls_endpoint_target(&host, port, 636)?;
             println!(
@@ -417,7 +433,12 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             let verify = !no_verify;
             match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
                 Ok(result) => {
-                    display::display_tls_check_result(&result, "LDAPS Endpoint Verification");
+                    let report =
+                        display::render_tls_check_result(&result, "LDAPS Endpoint Verification");
+                    print!("{report}");
+                    if let Some(path) = out.as_deref() {
+                        write_verify_results(path, &report)?;
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -428,15 +449,20 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             host,
             port,
             no_verify,
+            out,
         } => {
             println!("\nConnecting to {}:{}...", host, port);
             let verify = !no_verify;
             match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
                 Ok(result) => {
-                    display::display_tls_check_result(
+                    let report = display::render_tls_check_result(
                         &result,
                         "SMTP STARTTLS Endpoint Verification",
                     );
+                    print!("{report}");
+                    if let Some(path) = out.as_deref() {
+                        write_verify_results(path, &report)?;
+                    }
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
@@ -2628,6 +2654,13 @@ fn parse_endpoint_port(raw_port: &str, original: &str) -> Result<u16> {
     })
 }
 
+fn write_verify_results(path: &str, report: &str) -> Result<()> {
+    std::fs::write(path, report)
+        .with_context(|| format!("Failed to write verify results to {}", path))?;
+    println!("Saved report to {}", path);
+    Ok(())
+}
+
 fn format_connect_target(host: &str) -> Cow<'_, str> {
     if host.contains(':') {
         Cow::Owned(format!("[{host}]"))
@@ -3378,5 +3411,93 @@ mod tests {
         );
         assert!(sections.iter().any(|(group, entries)| group.title == "Exit"
             && entries.iter().any(|entry| entry.contains("[q]"))));
+    }
+
+    #[test]
+    fn verify_https_accepts_out_flag() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-https",
+            "--host",
+            "example.com",
+            "--out",
+            "report.txt",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifyHttps {
+                host,
+                port,
+                no_verify,
+                full_scan,
+                out,
+            }) => {
+                assert_eq!(host, "example.com");
+                assert_eq!(port, 443);
+                assert!(!no_verify);
+                assert!(!full_scan);
+                assert_eq!(out.as_deref(), Some("report.txt"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn verify_ldaps_accepts_out_flag() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-ldaps",
+            "--host",
+            "ldap.example.com",
+            "--out",
+            "ldaps.txt",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifyLdaps {
+                host,
+                port,
+                no_verify,
+                full_scan,
+                out,
+            }) => {
+                assert_eq!(host, "ldap.example.com");
+                assert_eq!(port, 636);
+                assert!(!no_verify);
+                assert!(!full_scan);
+                assert_eq!(out.as_deref(), Some("ldaps.txt"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn verify_smtp_accepts_out_flag() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-smtp",
+            "--host",
+            "smtp.example.com",
+            "--out",
+            "smtp.txt",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifySmtp {
+                host,
+                port,
+                no_verify,
+                out,
+            }) => {
+                assert_eq!(host, "smtp.example.com");
+                assert_eq!(port, 587);
+                assert!(!no_verify);
+                assert_eq!(out.as_deref(), Some("smtp.txt"));
+            }
+            _ => panic!("unexpected command"),
+        }
     }
 }

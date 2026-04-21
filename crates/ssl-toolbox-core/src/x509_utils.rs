@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::ssl::SslRef;
+use openssl::x509::X509VerifyResult;
 use openssl::x509::{X509, X509Ref};
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -155,6 +156,20 @@ where
     chain
 }
 
+fn filter_untrusted_intermediates(chain: Vec<X509>) -> Vec<X509> {
+    chain
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, cert)| {
+            if idx == 0 || cert.issued(cert.as_ref()) == X509VerifyResult::OK {
+                None
+            } else {
+                Some(cert)
+            }
+        })
+        .collect()
+}
+
 /// Collect the peer chain in leaf-first order with duplicate certificates removed.
 pub fn collect_peer_chain(ssl: &SslRef) -> Vec<X509> {
     let leaf = ssl.peer_certificate();
@@ -165,6 +180,12 @@ pub fn collect_peer_chain(ssl: &SslRef) -> Vec<X509> {
         }
         None => build_peer_chain(leaf.as_ref().map(|cert| cert.as_ref()), std::iter::empty()),
     }
+}
+
+/// Collect the peer certificates that should be treated as untrusted intermediates for
+/// verification. This excludes the leaf and any self-signed root sent by the server.
+pub fn collect_peer_untrusted_chain(ssl: &SslRef) -> Vec<X509> {
+    filter_untrusted_intermediates(collect_peer_chain(ssl))
 }
 
 /// Extract certificate chain details from the SSL connection.
@@ -373,5 +394,25 @@ mod tests {
         assert_ne!(details.serial_number, "Unknown");
         assert!(details.sha1_fingerprint.contains(':'));
         assert!(details.sha256_fingerprint.contains(':'));
+    }
+
+    #[test]
+    fn peer_untrusted_chain_excludes_self_signed_root() {
+        let leaf = make_test_cert("leaf.example.com", "Test Intermediate");
+        let intermediate = make_test_cert("Test Intermediate", "Test Root");
+        let root = make_test_cert("Test Root", "Test Root");
+
+        let chain = build_peer_chain(
+            Some(leaf.as_ref()),
+            [leaf.as_ref(), intermediate.as_ref(), root.as_ref()],
+        );
+        let untrusted = filter_untrusted_intermediates(chain);
+
+        let common_names: Vec<_> = untrusted
+            .iter()
+            .map(|cert| x509_to_cert_details(cert.as_ref()).common_name)
+            .collect();
+
+        assert_eq!(common_names, vec!["Test Intermediate"]);
     }
 }
