@@ -147,10 +147,7 @@ impl CaPlugin for SectigoPlugin {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
-        let url = format!(
-            "{}/api/ssl/v2/types?orgId={}",
-            self.api_base, self.org_id
-        );
+        let url = format!("{}/api/ssl/v2/types?orgId={}", self.api_base, self.org_id);
 
         let response = client
             .get(&url)
