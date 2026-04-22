@@ -206,73 +206,7 @@ pub fn extract_cert_chain_details(cert_file_content: &[u8]) -> Result<Vec<CertDe
         return Err(anyhow::anyhow!("No certificates found in file"));
     }
 
-    let get_subject_cn = |cert: &X509| -> String {
-        cert.subject_name()
-            .entries()
-            .find(|entry| entry.object().nid() == Nid::COMMONNAME)
-            .and_then(|entry| entry.data().as_utf8().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "N/A".to_string())
-    };
-
-    let get_issuer_cn = |cert: &X509| -> String {
-        cert.issuer_name()
-            .entries()
-            .find(|entry| entry.object().nid() == Nid::COMMONNAME)
-            .and_then(|entry| entry.data().as_utf8().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                cert.issuer_name()
-                    .entries()
-                    .find(|entry| entry.object().nid() == Nid::ORGANIZATIONNAME)
-                    .and_then(|entry| entry.data().as_utf8().ok())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "Unknown".to_string())
-            })
-    };
-
-    // Build ordered chain starting from root
-    let root_cert = all_certs.iter().find(|cert| {
-        let subject_cn = get_subject_cn(cert);
-        let issuer_cn = get_issuer_cn(cert);
-        subject_cn == issuer_cn
-    });
-
-    let mut ordered_certs = Vec::new();
-
-    if let Some(root) = root_cert {
-        ordered_certs.push(root);
-
-        let mut current_subject = get_subject_cn(root);
-
-        while ordered_certs.len() < all_certs.len() {
-            let next_cert = all_certs.iter().find(|cert| {
-                let issuer_cn = get_issuer_cn(cert);
-                let subject_cn = get_subject_cn(cert);
-                issuer_cn == current_subject && subject_cn != current_subject
-            });
-
-            if let Some(next) = next_cert {
-                ordered_certs.push(next);
-                current_subject = get_subject_cn(next);
-            } else {
-                break;
-            }
-        }
-
-        // Add any remaining certs not yet in the ordered list
-        for cert in &all_certs {
-            if !ordered_certs.iter().any(|c| std::ptr::eq(*c, cert)) {
-                ordered_certs.push(cert);
-            }
-        }
-    } else {
-        for cert in &all_certs {
-            ordered_certs.push(cert);
-        }
-    }
-
-    let cert_details_list = ordered_certs
+    let cert_details_list = all_certs
         .iter()
         .map(|cert| x509_to_cert_details(cert))
         .collect();
@@ -414,5 +348,32 @@ mod tests {
             .collect();
 
         assert_eq!(common_names, vec!["Test Intermediate"]);
+    }
+
+    #[test]
+    fn extract_cert_chain_details_preserves_pem_file_order() {
+        let root = make_test_cert("Test Root", "Test Root");
+        let intermediate = make_test_cert("Test Intermediate", "Test Root");
+        let leaf = make_test_cert("leaf.example.com", "Test Intermediate");
+
+        let mut bundle = Vec::new();
+        bundle.extend(root.to_pem().unwrap());
+        bundle.extend(intermediate.to_pem().unwrap());
+        bundle.extend(leaf.to_pem().unwrap());
+
+        let common_names: Vec<_> = extract_cert_chain_details(&bundle)
+            .unwrap()
+            .into_iter()
+            .map(|cert| cert.common_name)
+            .collect();
+
+        assert_eq!(
+            common_names,
+            vec![
+                "Test Root".to_string(),
+                "Test Intermediate".to_string(),
+                "leaf.example.com".to_string()
+            ]
+        );
     }
 }

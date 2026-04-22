@@ -291,7 +291,7 @@ ssl-toolbox view-cert --input server.crt
 Shows:
 - Common Name, Issuer, Validity period
 - Subject Alternative Names
-- If the file contains a chain: each certificate is listed with its role (Leaf, Intermediate, Root)
+- If the file contains a chain: certificates are displayed in the same order they appear in the file, with roles inferred from that order when possible
 
 Accepts both PEM and DER encoded files.
 
@@ -537,7 +537,7 @@ Configures the Sectigo CA plugin. Only needed when using `ca` subcommands.
 
 ```json
 {
-  "api_base": "https://cert-manager.com",
+  "api_base": "https://admin.enterprise.sectigo.com",
   "org_id": "12345",
   "product_code": "4491",
   "token_url": "https://auth.sso.sectigo.com/auth/realms/apiclients/protocol/openid-connect/token"
@@ -546,7 +546,7 @@ Configures the Sectigo CA plugin. Only needed when using `ca` subcommands.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `api_base` | String | `https://cert-manager.com` | Sectigo Certificate Manager API base URL |
+| `api_base` | String | `https://admin.enterprise.sectigo.com` | Sectigo Certificate Manager API base URL |
 | `org_id` | String | *(empty)* | Your Sectigo organization ID |
 | `product_code` | String | *(empty)* | Default certificate type/profile ID |
 | `token_url` | String | *(empty)* | OAuth 2.0 token endpoint URL |

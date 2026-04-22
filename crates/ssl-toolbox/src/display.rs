@@ -4,6 +4,75 @@ use ssl_toolbox_core::{
     CertDetails, CertValidation, PfxDetails, PrivateKeySummary, TlsCheckResult,
 };
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ChainDirection {
+    LeafFirst,
+    RootFirst,
+    Unknown,
+}
+
+fn is_self_signed(details: &CertDetails) -> bool {
+    details.common_name == details.issuer
+}
+
+fn detect_chain_direction(cert_chain: &[CertDetails]) -> ChainDirection {
+    if cert_chain.len() < 2 {
+        return ChainDirection::Unknown;
+    }
+
+    let leaf_first = cert_chain
+        .windows(2)
+        .all(|pair| pair[0].issuer == pair[1].common_name);
+    let root_first = cert_chain
+        .windows(2)
+        .all(|pair| pair[1].issuer == pair[0].common_name);
+
+    match (leaf_first, root_first) {
+        (true, false) => ChainDirection::LeafFirst,
+        (false, true) => ChainDirection::RootFirst,
+        _ => {
+            let first_self_signed = is_self_signed(&cert_chain[0]);
+            let last_self_signed = is_self_signed(cert_chain.last().unwrap());
+
+            if first_self_signed && !last_self_signed {
+                ChainDirection::RootFirst
+            } else if last_self_signed && !first_self_signed {
+                ChainDirection::LeafFirst
+            } else {
+                ChainDirection::Unknown
+            }
+        }
+    }
+}
+
+fn certificate_label(cert_chain: &[CertDetails], idx: usize) -> &'static str {
+    if cert_chain.len() == 1 {
+        return "Certificate";
+    }
+
+    match detect_chain_direction(cert_chain) {
+        ChainDirection::LeafFirst => {
+            if idx == 0 {
+                "Leaf Certificate"
+            } else if idx == cert_chain.len() - 1 {
+                "Root / Top of Chain"
+            } else {
+                "Intermediate Certificate"
+            }
+        }
+        ChainDirection::RootFirst => {
+            if idx == 0 {
+                "Root / Top of Chain"
+            } else if idx == cert_chain.len() - 1 {
+                "Leaf Certificate"
+            } else {
+                "Intermediate Certificate"
+            }
+        }
+        ChainDirection::Unknown => "Certificate",
+    }
+}
+
 fn print_cert_detail_lines(prefix: &str, details: &CertDetails) {
     println!("{prefix}  CommonName: {}", details.common_name);
     println!("{prefix}  Issuer: {}", details.issuer);
@@ -20,6 +89,42 @@ fn print_cert_detail_lines(prefix: &str, details: &CertDetails) {
         "{prefix}  SHA256 Fingerprint: {}",
         details.sha256_fingerprint
     );
+}
+
+fn write_cert_detail_lines(output: &mut String, prefix: &str, details: &CertDetails) {
+    writeln!(output, "{prefix}  CommonName: {}", details.common_name).unwrap();
+    writeln!(output, "{prefix}  Issuer: {}", details.issuer).unwrap();
+    writeln!(output, "{prefix}  Serial Number: {}", details.serial_number).unwrap();
+    writeln!(
+        output,
+        "{prefix}  Signature Algorithm: {}",
+        details.signature_algorithm
+    )
+    .unwrap();
+    writeln!(output, "{prefix}  Public Key Bits: {}", details.public_key_bits).unwrap();
+    writeln!(output, "{prefix}  Valid From: {}", details.not_before).unwrap();
+    writeln!(output, "{prefix}  Valid Until: {}", details.not_after).unwrap();
+    writeln!(output, "{prefix}  SHA1 Fingerprint: {}", details.sha1_fingerprint).unwrap();
+    writeln!(
+        output,
+        "{prefix}  SHA256 Fingerprint: {}",
+        details.sha256_fingerprint
+    )
+    .unwrap();
+}
+
+fn write_sans_lines(output: &mut String, prefix: &str, sans: &[String], show_none: bool) {
+    if sans.is_empty() {
+        if show_none {
+            writeln!(output, "{prefix}  SANs: None").unwrap();
+        }
+        return;
+    }
+
+    writeln!(output, "{prefix}  SANs:").unwrap();
+    for san in sans {
+        writeln!(output, "{prefix}    • {}", san).unwrap();
+    }
 }
 
 fn display_private_key_summary(summary: &PrivateKeySummary) {
@@ -58,56 +163,66 @@ pub fn display_cert_chain(cert_content: &[u8], title: &str) {
 
 /// Display a pre-parsed list of certificate details.
 pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
+    print!("{}", render_cert_details_list(cert_chain, title));
+}
+
+pub fn render_cert_details_list(cert_chain: &[CertDetails], title: &str) -> String {
+    let mut output = String::new();
+
     if cert_chain.len() == 1 {
-        println!("\n╔═══════════════════════════════════════════════════════════════╗");
-        println!("║  {:^59}  ║", title);
-        println!("╚═══════════════════════════════════════════════════════════════╝\n");
+        writeln!(
+            &mut output,
+            "\n╔═══════════════════════════════════════════════════════════════╗"
+        )
+        .unwrap();
+        writeln!(&mut output, "║  {:^59}  ║", title).unwrap();
+        writeln!(
+            &mut output,
+            "╚═══════════════════════════════════════════════════════════════╝\n"
+        )
+        .unwrap();
 
         let details = &cert_chain[0];
-        print_cert_detail_lines("", details);
-
-        if details.sans.is_empty() {
-            println!("  SANs: None");
-        } else {
-            println!("  SANs:");
-            for san in &details.sans {
-                println!("    • {}", san);
-            }
-        }
-        println!();
+        write_cert_detail_lines(&mut output, "", details);
+        write_sans_lines(&mut output, "", &details.sans, true);
+        writeln!(&mut output).unwrap();
     } else {
-        println!("\n╔═══════════════════════════════════════════════════════════════╗");
-        println!(
+        writeln!(
+            &mut output,
+            "\n╔═══════════════════════════════════════════════════════════════╗"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
             "║  {:^59}  ║",
             format!("{} ({} certs)", title, cert_chain.len())
-        );
-        println!("╚═══════════════════════════════════════════════════════════════╝\n");
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "╚═══════════════════════════════════════════════════════════════╝\n"
+        )
+        .unwrap();
 
         for (idx, details) in cert_chain.iter().enumerate() {
-            let cert_type = if idx == 0 {
-                "Leaf Certificate"
-            } else if idx == cert_chain.len() - 1 {
-                "Root / Top of Chain"
-            } else {
-                "Intermediate Certificate"
-            };
-
-            println!(
+            writeln!(
+                &mut output,
                 "┌─ Certificate #{} - {} ─────────────────────────",
                 idx + 1,
-                cert_type
-            );
-            print_cert_detail_lines("│", details);
-
-            if !details.sans.is_empty() {
-                println!("│  SANs:");
-                for san in &details.sans {
-                    println!("│    • {}", san);
-                }
-            }
-            println!("└────────────────────────────────────────────────────────────────\n");
+                certificate_label(cert_chain, idx)
+            )
+            .unwrap();
+            write_cert_detail_lines(&mut output, "│", details);
+            write_sans_lines(&mut output, "│", &details.sans, false);
+            writeln!(
+                &mut output,
+                "└────────────────────────────────────────────────────────────────\n"
+            )
+            .unwrap();
         }
     }
+
+    output
 }
 
 /// Display PFX contents including the private-key summary.
@@ -137,18 +252,10 @@ pub fn display_pfx_details(details: &PfxDetails, title: &str) {
     }
 
     for (idx, cert) in details.cert_chain.iter().enumerate() {
-        let cert_type = if idx == 0 {
-            "Leaf Certificate"
-        } else if idx == details.cert_chain.len() - 1 {
-            "Root / Top of Chain"
-        } else {
-            "Intermediate Certificate"
-        };
-
         println!(
             "┌─ Certificate #{} - {} ─────────────────────────",
             idx + 1,
-            cert_type
+            certificate_label(&details.cert_chain, idx)
         );
         print_cert_detail_lines("│", cert);
 
@@ -262,56 +369,7 @@ pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
     if result.cert_chain.is_empty() {
         writeln!(&mut output, "  No certificates presented by server.\n").unwrap();
     } else {
-        writeln!(
-            &mut output,
-            "┌─ Certificate Chain ({} cert{}) ──────────────────────────────",
-            result.cert_chain.len(),
-            if result.cert_chain.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        )
-        .unwrap();
-        writeln!(&mut output, "│").unwrap();
-
-        for (idx, details) in result.cert_chain.iter().enumerate() {
-            let cert_type = if idx == 0 {
-                "Leaf Certificate"
-            } else if idx == result.cert_chain.len() - 1 && result.cert_chain.len() > 1 {
-                "Root / Top of Chain"
-            } else {
-                "Intermediate Certificate"
-            };
-
-            writeln!(
-                &mut output,
-                "│  ── Certificate #{} - {} ──",
-                idx + 1,
-                cert_type
-            )
-            .unwrap();
-            writeln!(&mut output, "│     CommonName:  {}", details.common_name).unwrap();
-            writeln!(&mut output, "│     Issuer:      {}", details.issuer).unwrap();
-            writeln!(&mut output, "│     Valid From:  {}", details.not_before).unwrap();
-            writeln!(&mut output, "│     Valid Until: {}", details.not_after).unwrap();
-
-            if !details.sans.is_empty() {
-                writeln!(&mut output, "│     SANs:").unwrap();
-                for san in &details.sans {
-                    writeln!(&mut output, "│       • {}", san).unwrap();
-                }
-            }
-
-            if idx < result.cert_chain.len() - 1 {
-                writeln!(&mut output, "│").unwrap();
-            }
-        }
-        writeln!(
-            &mut output,
-            "└────────────────────────────────────────────────────────────────\n"
-        )
-        .unwrap();
+        output.push_str(&render_cert_details_list(&result.cert_chain, "Certificate Chain"));
     }
 
     output
@@ -412,6 +470,99 @@ mod tests {
         assert!(rendered.contains("Endpoint: example.com:443"));
         assert!(rendered.contains("TLS Version Support"));
         assert!(rendered.contains("Certificate Validation"));
-        assert!(rendered.contains("Certificate Chain (1 cert)"));
+        assert!(rendered.contains("Certificate Chain"));
+        assert!(rendered.contains("CommonName: example.com"));
+    }
+
+    #[test]
+    fn certificate_label_handles_root_first_chains() {
+        let cert_chain = vec![
+            CertDetails {
+                common_name: "Test Root".to_string(),
+                sans: vec![],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2036-01-01T00:00:00Z".to_string(),
+                issuer: "Test Root".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 4096,
+                serial_number: "01".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            },
+            CertDetails {
+                common_name: "Test Intermediate".to_string(),
+                sans: vec![],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2031-01-01T00:00:00Z".to_string(),
+                issuer: "Test Root".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 3072,
+                serial_number: "02".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            },
+            CertDetails {
+                common_name: "leaf.example.com".to_string(),
+                sans: vec![],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2027-01-01T00:00:00Z".to_string(),
+                issuer: "Test Intermediate".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 2048,
+                serial_number: "03".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            },
+        ];
+
+        assert_eq!(certificate_label(&cert_chain, 0), "Root / Top of Chain");
+        assert_eq!(certificate_label(&cert_chain, 1), "Intermediate Certificate");
+        assert_eq!(certificate_label(&cert_chain, 2), "Leaf Certificate");
+    }
+
+    #[test]
+    fn certificate_label_handles_leaf_first_chains() {
+        let cert_chain = vec![
+            CertDetails {
+                common_name: "leaf.example.com".to_string(),
+                sans: vec![],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2027-01-01T00:00:00Z".to_string(),
+                issuer: "Test Intermediate".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 2048,
+                serial_number: "03".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            },
+            CertDetails {
+                common_name: "Test Intermediate".to_string(),
+                sans: vec![],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2031-01-01T00:00:00Z".to_string(),
+                issuer: "Test Root".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 3072,
+                serial_number: "02".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            },
+            CertDetails {
+                common_name: "Test Root".to_string(),
+                sans: vec![],
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2036-01-01T00:00:00Z".to_string(),
+                issuer: "Test Root".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 4096,
+                serial_number: "01".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            },
+        ];
+
+        assert_eq!(certificate_label(&cert_chain, 0), "Leaf Certificate");
+        assert_eq!(certificate_label(&cert_chain, 1), "Intermediate Certificate");
+        assert_eq!(certificate_label(&cert_chain, 2), "Root / Top of Chain");
     }
 }

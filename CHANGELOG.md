@@ -4,6 +4,18 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.0.3 — 2026-04-21
+
+### fix: preserve certificate chain order and reuse chain rendering
+
+`view-cert` now preserves PEM bundle order exactly as provided and infers leaf/intermediate/root labels from chain direction instead of reordering certificates. TLS verification output reuses the same certificate-chain renderer, so file inspection and live HTTPS/LDAPS checks present chain details consistently.
+
+### fix: align Sectigo SCM integration with current admin API
+
+Updated the Sectigo integration defaults to use `https://admin.enterprise.sectigo.com`, switched SSL profile lookup to the documented `orgId` query parameter, and fail fast when `SECTIGO_ORG_ID` is missing instead of surfacing a misleading remote 401.
+
+---
+
 ## v2.0.2 — 2026-04-21
 
 ### feat: save verify reports to file

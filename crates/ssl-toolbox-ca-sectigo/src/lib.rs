@@ -4,7 +4,7 @@ use ssl_toolbox_ca::{CaPlugin, CertProfile, CollectFormat, SubmitOptions};
 use std::env;
 
 fn default_api_base() -> String {
-    "https://cert-manager.com".to_string()
+    "https://admin.enterprise.sectigo.com".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,8 +67,13 @@ impl SectigoPlugin {
 
         if debug {
             println!("DEBUG: Configuring Sectigo plugin");
+            println!("  API Base: {}", api_base);
             println!("  Token URL: {}", scm_token_url);
             println!("  Client ID length: {}", scm_client_id.len());
+            println!(
+                "  Organization ID configured: {}",
+                if org_id.is_empty() { "No" } else { "Yes" }
+            );
         }
 
         Ok(Box::new(SectigoPlugin {
@@ -129,6 +134,12 @@ impl CaPlugin for SectigoPlugin {
     }
 
     fn list_profiles(&self, debug: bool) -> Result<Vec<CertProfile>> {
+        if self.org_id.is_empty() {
+            return Err(anyhow!(
+                "SECTIGO_ORG_ID not set. Set it in .env or .ssl-toolbox/sectigo.json"
+            ));
+        }
+
         println!("Fetching available SSL certificate types from Sectigo...");
         let token = self.get_token(debug)?;
 
@@ -137,7 +148,7 @@ impl CaPlugin for SectigoPlugin {
             .build()?;
 
         let url = format!(
-            "{}/api/ssl/v2/types?organizationId={}",
+            "{}/api/ssl/v2/types?orgId={}",
             self.api_base, self.org_id
         );
 
