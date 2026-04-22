@@ -91,7 +91,7 @@ Run `ssl-toolbox init` to generate template config files, or `ssl-toolbox init -
 
 ```json
 {
-  "api_base": "https://cert-manager.com",
+  "api_base": "https://admin.enterprise.sectigo.com",
   "org_id": "12345",
   "product_code": "4491",
   "token_url": "https://auth.sso.sectigo.com/auth/realms/apiclients/protocol/openid-connect/token"

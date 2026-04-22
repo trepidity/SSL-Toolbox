@@ -282,7 +282,7 @@ pub fn init_config(dir: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
     let sectigo_path = dir.join("sectigo.json");
     if !sectigo_path.exists() {
         let example = serde_json::json!({
-            "api_base": "https://cert-manager.com",
+            "api_base": "https://admin.enterprise.sectigo.com",
             "org_id": "",
             "product_code": "",
             "token_url": ""

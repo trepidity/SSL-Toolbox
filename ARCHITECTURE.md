@@ -610,6 +610,8 @@ TripleDES-SHA1 is no longer considered strong; SHA-1 is collision-broken and Tri
 
 **Accepted because:** certificate files are already ambiguous enough; a "smart" re-order would silently fix some inputs and subtly corrupt others (intermediate with matching CN but different serial, cross-signed CAs, etc.). The rule "leaf is last" matches every `cat leaf.crt chain.crt > bundle.pem` convention in the wild, is easy to document, and puts responsibility on the file's author rather than a heuristic.
 
+`view-cert` follows the same principle: `extract_cert_chain_details` preserves PEM bundle order exactly as loaded from disk. The display layer may annotate roles (leaf/intermediate/root) when the adjacent issuer relationships make the direction obvious, but it must not reorder the certificates to force a preferred orientation.
+
 ### Chain validation still uses the system trust store
 
 Even though OpenSSL is vendored, `validate_chain` calls `X509StoreBuilder::set_default_paths`, which reads the host's CA bundle (`/etc/ssl/certs`, macOS Keychain exports, Windows cert store on some builds, etc.).

@@ -3331,13 +3331,12 @@ mod tests {
 
     #[test]
     fn parse_endpoint_input_accepts_https_url_with_port() {
-        let parsed =
-            parse_endpoint_input("https://accessone.bswhealth.com:443").expect("parsed input");
+        let parsed = parse_endpoint_input("https://host.example.com:443").expect("parsed input");
 
         assert_eq!(
             parsed,
             ParsedEndpointInput {
-                host: "accessone.bswhealth.com".to_string(),
+                host: "host.example.com".to_string(),
                 port: Some(443),
             }
         );
