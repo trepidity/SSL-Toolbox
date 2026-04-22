@@ -101,10 +101,20 @@ fn write_cert_detail_lines(output: &mut String, prefix: &str, details: &CertDeta
         details.signature_algorithm
     )
     .unwrap();
-    writeln!(output, "{prefix}  Public Key Bits: {}", details.public_key_bits).unwrap();
+    writeln!(
+        output,
+        "{prefix}  Public Key Bits: {}",
+        details.public_key_bits
+    )
+    .unwrap();
     writeln!(output, "{prefix}  Valid From: {}", details.not_before).unwrap();
     writeln!(output, "{prefix}  Valid Until: {}", details.not_after).unwrap();
-    writeln!(output, "{prefix}  SHA1 Fingerprint: {}", details.sha1_fingerprint).unwrap();
+    writeln!(
+        output,
+        "{prefix}  SHA1 Fingerprint: {}",
+        details.sha1_fingerprint
+    )
+    .unwrap();
     writeln!(
         output,
         "{prefix}  SHA256 Fingerprint: {}",
@@ -369,7 +379,10 @@ pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
     if result.cert_chain.is_empty() {
         writeln!(&mut output, "  No certificates presented by server.\n").unwrap();
     } else {
-        output.push_str(&render_cert_details_list(&result.cert_chain, "Certificate Chain"));
+        output.push_str(&render_cert_details_list(
+            &result.cert_chain,
+            "Certificate Chain",
+        ));
     }
 
     output
@@ -516,7 +529,10 @@ mod tests {
         ];
 
         assert_eq!(certificate_label(&cert_chain, 0), "Root / Top of Chain");
-        assert_eq!(certificate_label(&cert_chain, 1), "Intermediate Certificate");
+        assert_eq!(
+            certificate_label(&cert_chain, 1),
+            "Intermediate Certificate"
+        );
         assert_eq!(certificate_label(&cert_chain, 2), "Leaf Certificate");
     }
 
@@ -562,7 +578,10 @@ mod tests {
         ];
 
         assert_eq!(certificate_label(&cert_chain, 0), "Leaf Certificate");
-        assert_eq!(certificate_label(&cert_chain, 1), "Intermediate Certificate");
+        assert_eq!(
+            certificate_label(&cert_chain, 1),
+            "Intermediate Certificate"
+        );
         assert_eq!(certificate_label(&cert_chain, 2), "Root / Top of Chain");
     }
 }
