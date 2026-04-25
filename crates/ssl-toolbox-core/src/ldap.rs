@@ -1,10 +1,22 @@
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
 
 use crate::{LdapAttribute, LdapConfigCheckResult};
+
+pub enum LdapBindConfig {
+    Anonymous,
+    Simple { bind_dn: String, password: String },
+}
+
+impl LdapBindConfig {
+    pub fn authentication_label(&self) -> String {
+        match self {
+            Self::Anonymous => "Anonymous bind".to_string(),
+            Self::Simple { bind_dn, .. } => format!("Authenticated bind ({bind_dn})"),
+        }
+    }
+}
 
 const ROOT_DSE_ATTRIBUTES: &[&str] = &[
     "defaultNamingContext",
@@ -21,15 +33,34 @@ const ROOT_DSE_ATTRIBUTES: &[&str] = &[
     "vendorVersion",
 ];
 
-/// Run an unauthenticated LDAP RootDSE base search against a plain LDAP endpoint.
+/// Run an unauthenticated LDAP RootDSE base search against an LDAPS endpoint.
 pub fn check_unauthenticated_base_config(host: &str, port: u16) -> Result<LdapConfigCheckResult> {
-    let mut stream = connect_plain_ldap(host, port)?;
+    check_base_config(host, port, &LdapBindConfig::Anonymous)
+}
 
+/// Run an LDAP RootDSE base search against an LDAPS endpoint.
+pub fn check_base_config(
+    host: &str,
+    port: u16,
+    bind_config: &LdapBindConfig,
+) -> Result<LdapConfigCheckResult> {
+    let mut stream = crate::tls::perform_tls_handshake(host, port, None, None, false)
+        .context("Failed to connect to LDAPS endpoint")?;
+
+    check_root_dse_over_stream(&mut stream, host, port, bind_config)
+}
+
+fn check_root_dse_over_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    port: u16,
+    bind_config: &LdapBindConfig,
+) -> Result<LdapConfigCheckResult> {
     stream
-        .write_all(&anonymous_bind_request(1))
-        .context("Failed to send anonymous LDAP bind request")?;
+        .write_all(&bind_request(1, bind_config))
+        .context("Failed to send LDAP bind request")?;
     let bind_response =
-        read_ldap_message(&mut stream).context("Failed to read LDAP bind response")?;
+        read_ldap_message(&mut *stream).context("Failed to read LDAP bind response")?;
     let bind_result =
         parse_ldap_result(&bind_response, 0x61).context("Invalid LDAP bind response")?;
     if bind_result.code != 0 {
@@ -47,7 +78,7 @@ pub fn check_unauthenticated_base_config(host: &str, port: u16) -> Result<LdapCo
     let mut attributes = BTreeMap::<String, Vec<String>>::new();
     loop {
         let message =
-            read_ldap_message(&mut stream).context("Failed to read LDAP search response")?;
+            read_ldap_message(&mut *stream).context("Failed to read LDAP search response")?;
         let (_, content_start, content_end, _) = parse_tlv_at(&message, 0)?;
         let (_, _, _, mut offset) = parse_tlv_at(&message, content_start)?;
         let (op_tag, op_start, op_end, _) = parse_tlv_at(&message, offset)?;
@@ -78,6 +109,7 @@ pub fn check_unauthenticated_base_config(host: &str, port: u16) -> Result<LdapCo
     Ok(LdapConfigCheckResult {
         host: host.to_string(),
         port,
+        authentication: bind_config.authentication_label(),
         attributes: attributes
             .into_iter()
             .map(|(name, values)| LdapAttribute { name, values })
@@ -85,35 +117,16 @@ pub fn check_unauthenticated_base_config(host: &str, port: u16) -> Result<LdapCo
     })
 }
 
-fn connect_plain_ldap(host: &str, port: u16) -> Result<TcpStream> {
-    let addr = socket_addr_target(host, port);
-    let socket_addr = addr
-        .to_socket_addrs()
-        .with_context(|| format!("Failed to resolve {addr}"))?
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No addresses found for {addr}"))?;
+fn bind_request(message_id: u32, bind_config: &LdapBindConfig) -> Vec<u8> {
+    let (bind_dn, password) = match bind_config {
+        LdapBindConfig::Anonymous => ("", ""),
+        LdapBindConfig::Simple { bind_dn, password } => (bind_dn.as_str(), password.as_str()),
+    };
 
-    let stream = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10))
-        .with_context(|| format!("TCP connection to {addr} timed out"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    Ok(stream)
-}
-
-fn socket_addr_target(host: &str, port: u16) -> String {
-    let host = host.trim_matches(|ch| ch == '[' || ch == ']');
-    if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
-}
-
-fn anonymous_bind_request(message_id: u32) -> Vec<u8> {
     let mut bind = Vec::new();
     bind.extend(integer(3));
-    bind.extend(octet_string(b""));
-    bind.extend(tlv(0x80, &[]));
+    bind.extend(octet_string(bind_dn.as_bytes()));
+    bind.extend(tlv(0x80, password.as_bytes()));
     ldap_message(message_id, 0x60, &bind)
 }
 
@@ -192,7 +205,7 @@ fn encode_length(len: usize, out: &mut Vec<u8>) {
     out.extend(bytes);
 }
 
-fn read_ldap_message(stream: &mut TcpStream) -> Result<Vec<u8>> {
+fn read_ldap_message(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut header = [0_u8; 2];
     stream.read_exact(&mut header)?;
     if header[0] != 0x30 {
@@ -369,7 +382,7 @@ mod tests {
 
     #[test]
     fn anonymous_bind_request_uses_ldap_v3_empty_credentials() {
-        let request = anonymous_bind_request(1);
+        let request = bind_request(1, &LdapBindConfig::Anonymous);
 
         assert_eq!(
             request,
@@ -377,6 +390,20 @@ mod tests {
                 0x30, 0x0c, 0x02, 0x01, 0x01, 0x60, 0x07, 0x02, 0x01, 0x03, 0x04, 0x00, 0x80, 0x00,
             ]
         );
+    }
+
+    #[test]
+    fn authenticated_bind_request_encodes_dn_and_password() {
+        let request = bind_request(
+            1,
+            &LdapBindConfig::Simple {
+                bind_dn: "cn=reader,dc=example,dc=com".to_string(),
+                password: "secret".to_string(),
+            },
+        );
+
+        assert!(request.windows(27).any(|item| item == b"cn=reader,dc=example,dc=com"));
+        assert!(request.windows(6).any(|item| item == b"secret"));
     }
 
     #[test]

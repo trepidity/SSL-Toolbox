@@ -146,12 +146,18 @@ enum Commands {
         /// Probe each protocol version against the locally testable cipher-suite set
         #[arg(long)]
         full_scan: bool,
-        /// Also run an unauthenticated RootDSE base search on plain LDAP
+        /// Also run an anonymous or authenticated RootDSE base search over LDAPS
         #[arg(long)]
         ldap_config_test: bool,
-        /// Plain LDAP port for --ldap-config-test
-        #[arg(long, default_value = "389", requires = "ldap_config_test")]
-        ldap_port: u16,
+        /// Override the LDAPS port for --ldap-config-test
+        #[arg(long, requires = "ldap_config_test")]
+        ldap_port: Option<u16>,
+        /// Bind DN for authenticated RootDSE search
+        #[arg(long, requires = "ldap_config_test")]
+        ldap_bind_dn: Option<String>,
+        /// Password for --ldap-bind-dn
+        #[arg(long, requires = "ldap_config_test")]
+        ldap_bind_password: Option<String>,
         /// Save results to a file
         #[arg(short, long)]
         out: Option<String>,
@@ -467,9 +473,17 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             full_scan,
             ldap_config_test,
             ldap_port,
+            ldap_bind_dn,
+            ldap_bind_password,
             out,
         } => {
             let (host, port) = normalize_tls_endpoint_target(&host, port, 636)?;
+            let ldap_config_options = ldap_config_test_options_from_cli(
+                ldap_config_test,
+                ldap_port.unwrap_or(port),
+                ldap_bind_dn,
+                ldap_bind_password,
+            )?;
             println!(
                 "\nConnecting to {}:{}...",
                 format_connect_target(&host),
@@ -488,7 +502,11 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                     );
                     let mut report =
                         display::render_tls_check_result(&result, "LDAPS Endpoint Verification");
-                    append_ldap_config_test_report(&mut report, &host, ldap_config_test, ldap_port);
+                    append_ldap_config_test_report(
+                        &mut report,
+                        &host,
+                        &ldap_config_options,
+                    );
                     if let Some(path) = out.as_deref() {
                         write_verify_results(path, &report, Some(&audit_entry))?;
                     }
@@ -586,6 +604,117 @@ enum CsrGenerationOutcome {
     Cancelled,
     CreatedKeyAndCsr,
     UsedExistingKey,
+}
+
+struct LdapConfigTestOptions {
+    enabled: bool,
+    port: u16,
+    bind_config: ssl_toolbox_core::ldap::LdapBindConfig,
+}
+
+impl LdapConfigTestOptions {
+    fn disabled(port: u16) -> Self {
+        Self {
+            enabled: false,
+            port,
+            bind_config: ssl_toolbox_core::ldap::LdapBindConfig::Anonymous,
+        }
+    }
+
+    fn bind_mode(&self) -> &'static str {
+        match self.bind_config {
+            ssl_toolbox_core::ldap::LdapBindConfig::Anonymous => "anonymous",
+            ssl_toolbox_core::ldap::LdapBindConfig::Simple { .. } => "authenticated",
+        }
+    }
+
+    fn bind_dn(&self) -> Option<&str> {
+        match &self.bind_config {
+            ssl_toolbox_core::ldap::LdapBindConfig::Anonymous => None,
+            ssl_toolbox_core::ldap::LdapBindConfig::Simple { bind_dn, .. } => Some(bind_dn),
+        }
+    }
+}
+
+fn ldap_config_test_options_from_cli(
+    enabled: bool,
+    port: u16,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+) -> Result<LdapConfigTestOptions> {
+    if !enabled {
+        if bind_dn.is_some() || bind_password.is_some() {
+            anyhow::bail!("LDAP bind options require --ldap-config-test");
+        }
+        return Ok(LdapConfigTestOptions::disabled(port));
+    }
+
+    let bind_config = match (bind_dn, bind_password) {
+        (None, None) => ssl_toolbox_core::ldap::LdapBindConfig::Anonymous,
+        (None, Some(_)) => anyhow::bail!("--ldap-bind-password requires --ldap-bind-dn"),
+        (Some(bind_dn), maybe_password) => {
+            if bind_dn.trim().is_empty() {
+                anyhow::bail!("--ldap-bind-dn cannot be empty");
+            }
+            let password = if let Some(password) = maybe_password {
+                password
+            } else {
+                password("Enter password for LDAP bind DN").interact()?
+            };
+            ssl_toolbox_core::ldap::LdapBindConfig::Simple { bind_dn, password }
+        }
+    };
+
+    Ok(LdapConfigTestOptions {
+        enabled,
+        port,
+        bind_config,
+    })
+}
+
+fn prompt_ldap_config_test_options(
+    enabled: bool,
+    port: u16,
+    seeded_bind_mode: Option<&str>,
+    seeded_bind_dn: Option<&str>,
+) -> Result<LdapConfigTestOptions> {
+    if !enabled {
+        return Ok(LdapConfigTestOptions::disabled(port));
+    }
+
+    let prefer_authenticated = seeded_bind_mode == Some("authenticated");
+    let bind_mode: String = if prefer_authenticated {
+        select("LDAP bind type")
+            .item("authenticated".to_string(), "Authenticated", "Simple bind with DN and password")
+            .item("anonymous".to_string(), "Anonymous", "No bind credentials")
+            .interact()?
+    } else {
+        select("LDAP bind type")
+            .item("anonymous".to_string(), "Anonymous", "No bind credentials")
+            .item("authenticated".to_string(), "Authenticated", "Simple bind with DN and password")
+            .interact()?
+    };
+
+    let bind_config = if bind_mode == "authenticated" {
+        let mut bind_dn_prompt = input("LDAP bind DN");
+        if let Some(bind_dn) = seeded_bind_dn.filter(|value| !value.is_empty()) {
+            bind_dn_prompt = bind_dn_prompt.default_input(bind_dn);
+        }
+        let bind_dn: String = bind_dn_prompt.interact()?;
+        if bind_dn.trim().is_empty() {
+            anyhow::bail!("LDAP bind DN cannot be empty");
+        }
+        let password = password("LDAP bind password").interact()?;
+        ssl_toolbox_core::ldap::LdapBindConfig::Simple { bind_dn, password }
+    } else {
+        ssl_toolbox_core::ldap::LdapBindConfig::Anonymous
+    };
+
+    Ok(LdapConfigTestOptions {
+        enabled,
+        port,
+        bind_config,
+    })
 }
 
 fn prompt_new_key_password() -> Result<String> {
@@ -1257,16 +1386,11 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     .initial_value(false)
                     .interact()?;
                 let ldap_config_test: bool =
-                    confirm("Run unauthenticated LDAP base configuration test?")
+                    confirm("Run LDAP base configuration test?")
                         .initial_value(false)
                         .interact()?;
-                let ldap_port: u16 = if ldap_config_test {
-                    let ldap_port_str: String =
-                        input("Plain LDAP port").default_input("389").interact()?;
-                    ldap_port_str.parse().unwrap_or(389)
-                } else {
-                    389
-                };
+                let ldap_config_options =
+                    prompt_ldap_config_test_options(ldap_config_test, port, None, None)?;
 
                 clear_screen()?;
                 println!(
@@ -1294,8 +1418,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         append_ldap_config_test_report(
                             &mut report,
                             &host,
-                            ldap_config_test,
-                            ldap_port,
+                            &ldap_config_options,
                         );
                         print!("{report}");
                         true
@@ -1314,20 +1437,21 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         false
                     }
                 };
-                finalize_job_if_success(
-                    &mut app_config.ui_state,
-                    JobRecord::new(
-                        ActionKind::VerifyLdaps,
-                        format!("Verify LDAPS endpoint {host}:{port}"),
-                    )
-                    .with_input("ldaps_host", host)
-                    .with_input("port", port.to_string())
-                    .with_input("verify", verify.to_string())
-                    .with_input("full_scan", full_scan.to_string())
-                    .with_input("ldap_config_test", ldap_config_test.to_string())
-                    .with_input("ldap_port", ldap_port.to_string()),
-                    success,
-                );
+                let mut job = JobRecord::new(
+                    ActionKind::VerifyLdaps,
+                    format!("Verify LDAPS endpoint {host}:{port}"),
+                )
+                .with_input("ldaps_host", host)
+                .with_input("port", port.to_string())
+                .with_input("verify", verify.to_string())
+                .with_input("full_scan", full_scan.to_string())
+                .with_input("ldap_config_test", ldap_config_options.enabled.to_string())
+                .with_input("ldap_port", ldap_config_options.port.to_string())
+                .with_input("ldap_bind", ldap_config_options.bind_mode().to_string());
+                if let Some(bind_dn) = ldap_config_options.bind_dn() {
+                    job = job.with_input("ldap_bind_dn", bind_dn.to_string());
+                }
+                finalize_job_if_success(&mut app_config.ui_state, job, success);
                 should_pause = true;
             }
             11 => {
@@ -3070,21 +3194,28 @@ fn write_verify_results(
     Ok(())
 }
 
-fn append_ldap_config_test_report(report: &mut String, host: &str, enabled: bool, ldap_port: u16) {
-    if !enabled {
+fn append_ldap_config_test_report(
+    report: &mut String,
+    host: &str,
+    options: &LdapConfigTestOptions,
+) {
+    if !options.enabled {
         return;
     }
 
+    let authentication = options.bind_config.authentication_label();
     println!(
-        "Checking unauthenticated LDAP base configuration on {}:{}...",
+        "Checking LDAPS base configuration on {}:{} with {}...",
         format_connect_target(host),
-        ldap_port
+        options.port,
+        authentication
     );
-    match ssl_toolbox_core::ldap::check_unauthenticated_base_config(host, ldap_port) {
+    match ssl_toolbox_core::ldap::check_base_config(host, options.port, &options.bind_config) {
         Ok(result) => report.push_str(&display::render_ldap_config_check_result(&result)),
         Err(error) => report.push_str(&display::render_ldap_config_check_error(
             host,
-            ldap_port,
+            options.port,
+            &authentication,
             &error.to_string(),
         )),
     }
@@ -3542,27 +3673,36 @@ fn replay_verify_endpoint(
         false
     };
     let ldap_config_test = if matches!(kind, ActionKind::VerifyLdaps) {
-        confirm("Run unauthenticated LDAP base configuration test?")
+        confirm("Run LDAP base configuration test?")
             .initial_value(seeded_bool(job, "ldap_config_test", false))
             .interact()?
     } else {
         false
     };
-    let ldap_port = if ldap_config_test {
-        let ldap_port_str: String = input("Plain LDAP port")
-            .default_input(seeded_value(job, "ldap_port").as_deref().unwrap_or("389"))
-            .interact()?;
-        ldap_port_str.parse().unwrap_or(389)
+    let ldap_port: u16 = seeded_value(job, "ldap_port")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(port);
+    let ldap_config_options = if matches!(kind, ActionKind::VerifyLdaps) {
+        prompt_ldap_config_test_options(
+            ldap_config_test,
+            ldap_port,
+            seeded_value(job, "ldap_bind").as_deref(),
+            seeded_value(job, "ldap_bind_dn").as_deref(),
+        )?
     } else {
-        389
+        LdapConfigTestOptions::disabled(ldap_port)
     };
     let mut replay_job = replay_job
         .with_input("verify", verify.to_string())
         .with_input("full_scan", full_scan.to_string());
     if matches!(kind, ActionKind::VerifyLdaps) {
         replay_job = replay_job
-            .with_input("ldap_config_test", ldap_config_test.to_string())
-            .with_input("ldap_port", ldap_port.to_string());
+            .with_input("ldap_config_test", ldap_config_options.enabled.to_string())
+            .with_input("ldap_port", ldap_config_options.port.to_string())
+            .with_input("ldap_bind", ldap_config_options.bind_mode().to_string());
+        if let Some(bind_dn) = ldap_config_options.bind_dn() {
+            replay_job = replay_job.with_input("ldap_bind_dn", bind_dn.to_string());
+        }
     }
     clear_screen()?;
     println!(
@@ -3578,7 +3718,7 @@ fn replay_verify_endpoint(
                         record_validation_success(kind, &host, port, verify, full_scan, &result);
                     print_validation_audit_feedback(&audit_entry);
                     let mut report = display::render_tls_check_result(&result, kind.title());
-                    append_ldap_config_test_report(&mut report, &host, ldap_config_test, ldap_port);
+                    append_ldap_config_test_report(&mut report, &host, &ldap_config_options);
                     print!("{report}");
                 }
                 Err(error) => {
@@ -3971,6 +4111,8 @@ mod tests {
                 full_scan,
                 ldap_config_test,
                 ldap_port,
+                ldap_bind_dn,
+                ldap_bind_password,
                 out,
             }) => {
                 assert_eq!(host, "ldap.example.com");
@@ -3978,7 +4120,9 @@ mod tests {
                 assert!(!no_verify);
                 assert!(!full_scan);
                 assert!(!ldap_config_test);
-                assert_eq!(ldap_port, 389);
+                assert_eq!(ldap_port, None);
+                assert_eq!(ldap_bind_dn, None);
+                assert_eq!(ldap_bind_password, None);
                 assert_eq!(out.as_deref(), Some("ldaps.txt"));
             }
             _ => panic!("unexpected command"),
@@ -4007,7 +4151,37 @@ mod tests {
             }) => {
                 assert_eq!(host, "ldap.example.com");
                 assert!(ldap_config_test);
-                assert_eq!(ldap_port, 1389);
+                assert_eq!(ldap_port, Some(1389));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn verify_ldaps_accepts_authenticated_ldap_config_test_flags() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-ldaps",
+            "--host",
+            "ldap.example.com",
+            "--ldap-config-test",
+            "--ldap-bind-dn",
+            "cn=reader,dc=example,dc=com",
+            "--ldap-bind-password",
+            "secret",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifyLdaps {
+                ldap_config_test,
+                ldap_bind_dn,
+                ldap_bind_password,
+                ..
+            }) => {
+                assert!(ldap_config_test);
+                assert_eq!(ldap_bind_dn.as_deref(), Some("cn=reader,dc=example,dc=com"));
+                assert_eq!(ldap_bind_password.as_deref(), Some("secret"));
             }
             _ => panic!("unexpected command"),
         }

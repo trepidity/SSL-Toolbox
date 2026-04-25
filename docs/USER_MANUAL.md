@@ -377,12 +377,13 @@ Connection timeout is 10 seconds for both TCP and TLS handshake.
 ### verify-ldaps
 
 Verify the TLS certificate for an LDAPS endpoint. Same behavior and flags as [verify-https](#verify-https).
-Optionally, it can also run an unauthenticated plain LDAP RootDSE base search to confirm base directory configuration.
+Optionally, it can also run an anonymous or authenticated LDAPS RootDSE base search to confirm base directory configuration.
 
 ```bash
 ssl-toolbox verify-ldaps --host ldap.example.com
 ssl-toolbox verify-ldaps --host ldap.example.com --port 3269
 ssl-toolbox verify-ldaps --host ldap.example.com --ldap-config-test
+ssl-toolbox verify-ldaps --host ldap.example.com --ldap-config-test --ldap-bind-dn "cn=reader,dc=example,dc=com"
 ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
 ```
 
@@ -392,8 +393,10 @@ ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
 | `--port`, `-p` | No | Port number (default: 636) |
 | `--no-verify` | No | Skip certificate validation |
 | `--full-scan` | No | Probe each protocol version against the locally testable cipher-suite set |
-| `--ldap-config-test` | No | Run an unauthenticated RootDSE base search on plain LDAP |
-| `--ldap-port` | No | Plain LDAP port for `--ldap-config-test` (default: 389) |
+| `--ldap-config-test` | No | Run a RootDSE base search over LDAPS |
+| `--ldap-port` | No | Override the LDAPS port for `--ldap-config-test` (defaults to `--port`, normally 636) |
+| `--ldap-bind-dn` | No | Bind DN for authenticated RootDSE search; omit for anonymous bind |
+| `--ldap-bind-password` | No | Password for `--ldap-bind-dn`; prompted if omitted |
 | `--out`, `-o` | No | Save the verification report to a file |
 
 ### verify-smtp

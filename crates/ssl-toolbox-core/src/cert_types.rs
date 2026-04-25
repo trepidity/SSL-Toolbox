@@ -98,6 +98,7 @@ pub struct LdapAttribute {
 pub struct LdapConfigCheckResult {
     pub host: String,
     pub port: u16,
+    pub authentication: String,
     pub attributes: Vec<LdapAttribute>,
 }
 
