@@ -14,7 +14,16 @@
       "Bash(cargo check:*)",
       "Bash(pip3 install:*)",
       "Bash(cargo clippy:*)",
-      "Bash(cargo:*)"
+      "Bash(cargo:*)",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "Bash(gh run *)",
+      "Bash(gh api *)",
+      "Bash(git config *)",
+      "Bash(grep -v \"^[a-f0-9]\\\\+ $\")",
+      "Bash(gh issue *)",
+      "Bash(gh auth *)",
+      "Bash(ssh -T git@github.com)"
     ]
   }
 }

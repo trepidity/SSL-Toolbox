@@ -115,24 +115,25 @@ Running `ssl-toolbox` with no arguments opens a menu-driven interface. Each acti
 
 | # | Action | Description |
 |---|---|---|
-| 0 | Generate Key and CSR | Provide an OpenSSL `.cnf` file, get a `.key` and `.csr` |
-| 1 | Create PFX | Combine a key + signed cert (+ optional chain) into a `.pfx` |
-| 2 | Create Legacy PFX | Re-encrypt an existing PFX with TripleDES-SHA1 |
-| 3 | Generate New OpenSSL Config | Answer prompts (CN, SANs, key size, etc.) to build a `.cnf` |
-| 4 | Generate Config from Cert/CSR | Extract a `.cnf` from an existing `.crt` or `.csr` file |
-| 5 | View Certificate Details | Display CN, SANs, issuer, and validity for a cert file |
-| 6 | View CSR Details | Display CN and SANs for a CSR file |
-| 7 | View PFX Contents | Decrypt a PFX and show all certificates inside |
-| 8 | Verify HTTPS Endpoint | Connect to an HTTPS server and report TLS details |
-| 9 | Verify LDAPS Endpoint | Connect to an LDAPS server and report TLS details |
-| 10 | Verify SMTP Endpoint | Connect via SMTP STARTTLS and report TLS details |
-| 11 | Convert Certificate Format | Convert between PEM, DER, and Base64 |
-| 12 | Identify Certificate Format | Auto-detect a file's certificate format |
-| 13 | CA: Submit CSR | Submit a CSR to Sectigo for signing *(Sectigo feature only)* |
-| 14 | CA: List Profiles | List available certificate types from Sectigo *(Sectigo feature only)* |
+| 0 | Create Key | Build a standalone encrypted `.key` file |
+| 1 | Generate CSR | Use an existing `.key` or create one first, then write a `.csr` |
+| 2 | Create PFX | Combine a key + signed cert (+ optional chain) into a `.pfx` |
+| 3 | Create Legacy PFX | Re-encrypt an existing PFX with TripleDES-SHA1 |
+| 4 | Generate New OpenSSL Config | Answer prompts (CN, SANs, key size, etc.) to build a `.cnf` |
+| 5 | Generate Config from Cert/CSR | Extract a `.cnf` from an existing `.crt` or `.csr` file |
+| 6 | View Certificate Details | Display CN, SANs, issuer, and validity for a cert file |
+| 7 | View CSR Details | Display CN and SANs for a CSR file |
+| 8 | View PFX Contents | Decrypt a PFX and show all certificates inside |
+| 9 | Verify HTTPS Endpoint | Connect to an HTTPS server and report TLS details |
+| 10 | Verify LDAPS Endpoint | Connect to an LDAPS server and report TLS details |
+| 11 | Verify SMTP Endpoint | Connect via SMTP STARTTLS and report TLS details |
+| 12 | Convert Certificate Format | Convert between PEM, DER, and Base64 |
+| 13 | Identify Certificate Format | Auto-detect a file's certificate format |
+| 14 | CA: Submit CSR | Submit a CSR to Sectigo for signing *(Sectigo feature only)* |
+| 15 | CA: List Profiles | List available certificate types from Sectigo *(Sectigo feature only)* |
 | 99 | Exit | Close the application |
 
-Options 13 and 14 only appear when the binary is built with the `sectigo` feature (the default).
+Options 14 and 15 only appear when the binary is built with the `sectigo` feature (the default).
 
 **Smart defaults:** When generating a new OpenSSL config (option 3), each prompt shows the default value from your config file. Press Enter to accept a default, or type a new value.
 
@@ -166,9 +167,27 @@ Creates two files (skips any that already exist):
 - `config.json` -- CSR default values
 - `sectigo.json` -- Sectigo plugin settings
 
+### key
+
+Generate an encrypted RSA private key.
+
+```bash
+ssl-toolbox key --key server.key
+ssl-toolbox key --key server.key --password "s3cret"
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--key`, `-k` | Yes | Output path for the private key |
+| `--password`, `-p` | No | Key encryption password (prompted if omitted) |
+
+**Details:**
+- Generates a 2048-bit RSA key
+- Key is encrypted with AES-256-CBC (PKCS#8 format)
+
 ### generate
 
-Generate an RSA private key and CSR from an OpenSSL configuration file.
+Generate a CSR from an OpenSSL configuration file. If the target key file already exists, the tool uses it. If it does not exist, the tool offers to create a new key first.
 
 ```bash
 ssl-toolbox generate --conf openssl.cnf --key server.key --csr server.csr
@@ -178,13 +197,13 @@ ssl-toolbox generate --conf openssl.cnf --key server.key --csr server.csr --pass
 | Flag | Required | Description |
 |---|---|---|
 | `--conf`, `-c` | Yes | Path to OpenSSL `.cnf` config file |
-| `--key`, `-k` | Yes | Output path for the private key |
+| `--key`, `-k` | Yes | Path to the private key to use, or create if missing |
 | `--csr` | Yes | Output path for the CSR |
-| `--password`, `-p` | No | Key encryption password (prompted if omitted) |
+| `--password`, `-p` | No | Existing key password, or new key password if a key must be created |
 
 **Details:**
-- Generates a 2048-bit RSA key
-- Key is encrypted with AES-256-CBC (PKCS#8 format)
+- Reuses the specified key when it already exists
+- Prompts to create a new encrypted key when the specified key does not exist
 - CSR is signed with SHA-256
 - Reads subject fields from `[req_distinguished_name]` and SANs from `[alt_names]`
 - Supports all standard X.509 name fields: `C`, `ST`, `L`, `O`, `OU`, `CN`, `emailAddress`
@@ -358,10 +377,12 @@ Connection timeout is 10 seconds for both TCP and TLS handshake.
 ### verify-ldaps
 
 Verify the TLS certificate for an LDAPS endpoint. Same behavior and flags as [verify-https](#verify-https).
+Optionally, it can also run an unauthenticated plain LDAP RootDSE base search to confirm base directory configuration.
 
 ```bash
 ssl-toolbox verify-ldaps --host ldap.example.com
 ssl-toolbox verify-ldaps --host ldap.example.com --port 3269
+ssl-toolbox verify-ldaps --host ldap.example.com --ldap-config-test
 ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
 ```
 
@@ -371,6 +392,8 @@ ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
 | `--port`, `-p` | No | Port number (default: 636) |
 | `--no-verify` | No | Skip certificate validation |
 | `--full-scan` | No | Probe each protocol version against the locally testable cipher-suite set |
+| `--ldap-config-test` | No | Run an unauthenticated RootDSE base search on plain LDAP |
+| `--ldap-port` | No | Plain LDAP port for `--ldap-config-test` (default: 389) |
 | `--out`, `-o` | No | Save the verification report to a file |
 
 ### verify-smtp
@@ -596,15 +619,23 @@ ssl-toolbox new-config --out myserver.cnf
 
 Fill in the prompts. The tool generates a complete OpenSSL config with your subject, SANs, key size, and extended key usage.
 
-**Step 2:** Generate the key and CSR:
+**Step 2:** Create the key:
+
+```bash
+ssl-toolbox key --key myserver.key
+```
+
+You will be prompted for a password to encrypt the private key (AES-256-CBC).
+
+**Step 3:** Generate the CSR:
 
 ```bash
 ssl-toolbox generate --conf myserver.cnf --key myserver.key --csr myserver.csr
 ```
 
-You will be prompted for a password to encrypt the private key (AES-256-CBC).
+If `myserver.key` does not exist yet, the tool offers to create it before generating the CSR.
 
-**Step 3:** Submit the CSR to your CA for signing, or use the Sectigo integration (see below).
+**Step 4:** Submit the CSR to your CA for signing, or use the Sectigo integration (see below).
 
 ### Workflow: Submit to Sectigo and Create PFX
 

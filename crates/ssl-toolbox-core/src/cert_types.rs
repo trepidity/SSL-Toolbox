@@ -88,6 +88,19 @@ pub struct TlsCheckResult {
     pub validation: Option<CertValidation>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LdapAttribute {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LdapConfigCheckResult {
+    pub host: String,
+    pub port: u16,
+    pub attributes: Vec<LdapAttribute>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertFormat {
     Pem,

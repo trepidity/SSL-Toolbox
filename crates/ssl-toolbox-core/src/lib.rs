@@ -2,6 +2,7 @@ pub mod cert_types;
 pub mod config;
 pub mod convert;
 pub mod key_csr;
+pub mod ldap;
 pub mod pfx;
 pub mod smtp;
 pub mod tls;

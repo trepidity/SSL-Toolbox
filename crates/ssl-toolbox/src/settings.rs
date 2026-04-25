@@ -1,3 +1,4 @@
+use crate::audit::ValidationAuditEntry;
 use crate::workflow::{JobRecord, WorkflowMemory};
 use serde::{Deserialize, Serialize};
 use ssl_toolbox_core::CsrDefaults;
@@ -68,6 +69,18 @@ pub fn save_state(state: &UiState) -> anyhow::Result<()> {
     save_state_to(home_dir(), state)
 }
 
+pub fn validation_log_path() -> Option<PathBuf> {
+    validation_log_path_in(home_dir())
+}
+
+pub fn load_validation_log() -> Vec<ValidationAuditEntry> {
+    load_validation_log_from(home_dir())
+}
+
+pub fn append_validation_log_entry(entry: &ValidationAuditEntry) -> anyhow::Result<()> {
+    append_validation_log_entry_to(home_dir(), entry)
+}
+
 /// Load a CA plugin config file by name (e.g., "sectigo") from the config directories.
 /// Merges files in order: ~/.ssl-toolbox/<name>.json < ./.ssl-toolbox/<name>.json
 #[cfg(feature = "sectigo")]
@@ -122,6 +135,10 @@ fn state_path_in(home: Option<PathBuf>) -> Option<PathBuf> {
     home.map(|home| home.join(".ssl-toolbox").join("state.json"))
 }
 
+fn validation_log_path_in(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(|home| home.join(".ssl-toolbox").join("validation-log.jsonl"))
+}
+
 fn load_state_from(home: Option<PathBuf>) -> UiState {
     let Some(path) = state_path_in(home) else {
         return UiState::default();
@@ -170,6 +187,29 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     }
 }
 
+fn append_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        file.flush()?;
+        set_private_file_permissions(path)?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        file.write_all(contents)?;
+        file.flush()?;
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 fn set_private_dir_permissions(path: &Path) -> anyhow::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
@@ -189,6 +229,41 @@ fn set_private_file_permissions(path: &Path) -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn set_private_file_permissions(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn load_validation_log_from(home: Option<PathBuf>) -> Vec<ValidationAuditEntry> {
+    let Some(path) = validation_log_path_in(home) else {
+        return Vec::new();
+    };
+
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<ValidationAuditEntry>(line).ok())
+        .collect()
+}
+
+fn append_validation_log_entry_to(
+    home: Option<PathBuf>,
+    entry: &ValidationAuditEntry,
+) -> anyhow::Result<()> {
+    let Some(path) = validation_log_path_in(home) else {
+        return Ok(());
+    };
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        set_private_dir_permissions(parent)?;
+    }
+
+    let mut contents = serde_json::to_vec(entry)?;
+    contents.push(b'\n');
+    append_private_file(&path, &contents)?;
     Ok(())
 }
 
@@ -394,6 +469,45 @@ mod tests {
         assert_eq!(loaded.last_menu_choice, "pfx");
         assert_eq!(loaded.workflow, WorkflowMemory::default());
         assert!(loaded.recent_jobs.is_empty());
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn validation_log_round_trips_and_restricts_permissions() {
+        let home = temp_home_dir();
+        let entry = ValidationAuditEntry {
+            timestamp_secs: 1_704_067_200,
+            timestamp_utc: "2024-01-01T00:00:00Z".to_string(),
+            kind: crate::workflow::ActionKind::VerifyLdaps,
+            host: "ldap.example.com".to_string(),
+            port: 636,
+            certificate_validation_requested: true,
+            full_scan: false,
+            status: crate::audit::ValidationAuditStatus::Success,
+            result: None,
+            error: None,
+            comparison: crate::audit::ValidationComparison {
+                previous_timestamp_utc: None,
+                changes: vec!["First recorded validation for this endpoint.".to_string()],
+            },
+        };
+
+        append_validation_log_entry_to(Some(home.clone()), &entry).expect("append validation log");
+        let loaded = load_validation_log_from(Some(home.clone()));
+
+        assert_eq!(loaded, vec![entry]);
+
+        #[cfg(unix)]
+        {
+            let log_path = home.join(".ssl-toolbox").join("validation-log.jsonl");
+            let log_mode = fs::metadata(&log_path)
+                .expect("log metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(log_mode, 0o600);
+        }
 
         let _ = fs::remove_dir_all(home);
     }

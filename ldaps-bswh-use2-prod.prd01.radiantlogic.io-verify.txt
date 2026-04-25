@@ -1,0 +1,50 @@
+
+╔═══════════════════════════════════════════════════════════════╗
+║                  LDAPS Endpoint Verification                  ║
+╚═══════════════════════════════════════════════════════════════╝
+
+  Endpoint: ldaps-bswh-use2-prod.prd01.radiantlogic.io:636
+
+┌─ Negotiated Connection ─────────────────────────────────────
+│  Protocol:     TLSv1.3
+│  Cipher Suite: TLS_AES_128_GCM_SHA256
+│  Cipher Bits:  128
+└────────────────────────────────────────────────────────────────
+
+┌─ TLS Version Support ───────────────────────────────────────
+│  [-] TLS 1.0: No
+│  [-] TLS 1.1: No
+│  [+] TLS 1.2: Yes
+│  [+] TLS 1.3: Yes
+└────────────────────────────────────────────────────────────────
+
+┌─ Certificate Validation ────────────────────────────────────
+│  [+] Hostname Match: Pass (matches SAN "*.prd01.radiantlogic.io")
+│  [+] Expiry Check:   Pass (valid until Jul  8 23:59:59 2026 GMT)
+│  [+] Chain Valid:     Pass (chain verified against system trust store)
+└────────────────────────────────────────────────────────────────
+
+┌─ Certificate Chain (3 certs) ──────────────────────────────
+│
+│  ── Certificate #1 - Leaf Certificate ──
+│     CommonName:  prd01.radiantlogic.io
+│     Issuer:      Amazon RSA 2048 M04
+│     Valid From:  Jun  9 00:00:00 2025 GMT
+│     Valid Until: Jul  8 23:59:59 2026 GMT
+│     SANs:
+│       • DNS: prd01.radiantlogic.io
+│       • DNS: *.prd01.radiantlogic.io
+│
+│  ── Certificate #2 - Intermediate Certificate ──
+│     CommonName:  Amazon RSA 2048 M04
+│     Issuer:      Amazon Root CA 1
+│     Valid From:  Aug 23 22:26:35 2022 GMT
+│     Valid Until: Aug 23 22:26:35 2030 GMT
+│
+│  ── Certificate #3 - Root / Top of Chain ──
+│     CommonName:  Amazon Root CA 1
+│     Issuer:      Starfield Services Root Certificate Authority - G2
+│     Valid From:  May 25 12:00:00 2015 GMT
+│     Valid Until: Dec 31 01:00:00 2037 GMT
+└────────────────────────────────────────────────────────────────
+

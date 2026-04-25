@@ -1,0 +1,55 @@
+
+╔═══════════════════════════════════════════════════════════════╗
+║                  HTTPS Endpoint Verification                  ║
+╚═══════════════════════════════════════════════════════════════╝
+
+  Endpoint: accessone.bswhealth.com:443
+
+┌─ Negotiated Connection ─────────────────────────────────────
+│  Protocol:     TLSv1.2
+│  Cipher Suite: TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+│  Cipher Bits:  128
+└────────────────────────────────────────────────────────────────
+
+┌─ TLS Version Support ───────────────────────────────────────
+│  [-] TLS 1.0: No
+│  [-] TLS 1.1: No
+│  [+] TLS 1.2: Yes
+│  [-] TLS 1.3: No
+└────────────────────────────────────────────────────────────────
+
+┌─ Certificate Validation ────────────────────────────────────
+│  [+] Hostname Match: Pass (matches SAN "accessone.bswhealth.com")
+│  [+] Expiry Check:   Pass (valid until Aug 15 23:59:59 2026 GMT)
+│  [-] Chain Valid:     FAIL (chain verification failed)
+└────────────────────────────────────────────────────────────────
+
+┌─ Certificate Chain (4 certs) ──────────────────────────────
+│
+│  ── Certificate #1 - Leaf Certificate ──
+│     CommonName:  accessone.bswhealth.com
+│     Issuer:      Sectigo Public Server Authentication CA OV R36
+│     Valid From:  Jan 28 00:00:00 2026 GMT
+│     Valid Until: Aug 15 23:59:59 2026 GMT
+│     SANs:
+│       • DNS: accessone.bswhealth.com
+│
+│  ── Certificate #2 - Intermediate Certificate ──
+│     CommonName:  Sectigo Public Server Authentication CA OV R36
+│     Issuer:      Sectigo Public Server Authentication Root R46
+│     Valid From:  Mar 22 00:00:00 2021 GMT
+│     Valid Until: Mar 21 23:59:59 2036 GMT
+│
+│  ── Certificate #3 - Intermediate Certificate ──
+│     CommonName:  Sectigo Public Server Authentication Root R46
+│     Issuer:      USERTrust RSA Certification Authority
+│     Valid From:  Mar 22 00:00:00 2021 GMT
+│     Valid Until: Jan 18 23:59:59 2038 GMT
+│
+│  ── Certificate #4 - Root / Top of Chain ──
+│     CommonName:  USERTrust RSA Certification Authority
+│     Issuer:      USERTrust RSA Certification Authority
+│     Valid From:  Feb  1 00:00:00 2010 GMT
+│     Valid Until: Jan 18 23:59:59 2038 GMT
+└────────────────────────────────────────────────────────────────
+
