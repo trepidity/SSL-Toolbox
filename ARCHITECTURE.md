@@ -238,7 +238,7 @@ Implementation: `ssl-toolbox-core::tls` (HTTPS/LDAPS) and `ssl-toolbox-core::smt
 | Command | Default port | Transport | Upgrade |
 |---|---|---|---|
 | `verify-https` | 443 | Direct TLS | — |
-| `verify-ldaps` | 636 | Direct TLS | Optional unauthenticated RootDSE base search on plain LDAP (389 by default) |
+| `verify-ldaps` | 636 | Direct TLS | Optional anonymous or authenticated RootDSE base search over the selected LDAPS port (636 by default) |
 | `verify-smtp` | 587 | Plaintext SMTP → STARTTLS | EHLO → STARTTLS → TLS handshake |
 
 All probes use a **10-second TCP connect timeout** and **10-second read/write timeouts**.

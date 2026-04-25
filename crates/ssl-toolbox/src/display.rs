@@ -407,15 +407,11 @@ pub fn render_ldap_config_check_result(result: &LdapConfigCheckResult) -> String
 
     writeln!(
         &mut output,
-        "  Endpoint: ldap://{}:{}",
+        "  Endpoint: ldaps://{}:{}",
         result.host, result.port
     )
     .unwrap();
-    writeln!(
-        &mut output,
-        "  Authentication: Unauthenticated anonymous bind"
-    )
-    .unwrap();
+    writeln!(&mut output, "  Authentication: {}", result.authentication).unwrap();
     writeln!(&mut output, "  Search Base: RootDSE").unwrap();
     writeln!(&mut output).unwrap();
 
@@ -447,7 +443,12 @@ pub fn render_ldap_config_check_result(result: &LdapConfigCheckResult) -> String
     output
 }
 
-pub fn render_ldap_config_check_error(host: &str, port: u16, error: &str) -> String {
+pub fn render_ldap_config_check_error(
+    host: &str,
+    port: u16,
+    authentication: &str,
+    error: &str,
+) -> String {
     let mut output = String::new();
 
     writeln!(
@@ -462,12 +463,8 @@ pub fn render_ldap_config_check_error(host: &str, port: u16, error: &str) -> Str
     )
     .unwrap();
 
-    writeln!(&mut output, "  Endpoint: ldap://{}:{}", host, port).unwrap();
-    writeln!(
-        &mut output,
-        "  Authentication: Unauthenticated anonymous bind"
-    )
-    .unwrap();
+    writeln!(&mut output, "  Endpoint: ldaps://{}:{}", host, port).unwrap();
+    writeln!(&mut output, "  Authentication: {authentication}").unwrap();
     writeln!(&mut output, "  Result: FAIL ({error})").unwrap();
     writeln!(&mut output).unwrap();
 
