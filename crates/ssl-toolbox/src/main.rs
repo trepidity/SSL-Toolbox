@@ -1,3 +1,4 @@
+mod audit;
 mod display;
 mod settings;
 mod workflow;
@@ -34,7 +35,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate key and CSR from config
+    /// Create an encrypted private key
+    Key {
+        #[arg(short, long)]
+        key: String,
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+    /// Generate a CSR from config using an existing key or create a new key if needed
     Generate {
         #[arg(short, long)]
         conf: String,
@@ -138,6 +146,12 @@ enum Commands {
         /// Probe each protocol version against the locally testable cipher-suite set
         #[arg(long)]
         full_scan: bool,
+        /// Also run an unauthenticated RootDSE base search on plain LDAP
+        #[arg(long)]
+        ldap_config_test: bool,
+        /// Plain LDAP port for --ldap-config-test
+        #[arg(long, default_value = "389", requires = "ldap_config_test")]
+        ldap_port: u16,
         /// Save results to a file
         #[arg(short, long)]
         out: Option<String>,
@@ -219,20 +233,31 @@ fn get_ca_plugin(_debug: bool) -> Result<Box<dyn ssl_toolbox_ca::CaPlugin>> {
 
 fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
     match cmd {
-        Commands::Generate {
-            conf,
-            key,
-            csr,
-            password: pw,
-        } => {
+        Commands::Key { key, password: pw } => {
             let pass = if let Some(p) = pw {
                 p
             } else {
                 password("Enter password for private key").interact()?
             };
-            ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
-            println!("Success: Generated {} and {}", key, csr);
+            ssl_toolbox_core::key_csr::generate_private_key(&key, &pass)?;
+            println!("Success: Generated {}", key);
         }
+        Commands::Generate {
+            conf,
+            key,
+            csr,
+            password: pw,
+        } => match generate_csr_with_optional_key_creation(&conf, &key, &csr, pw)? {
+            CsrGenerationOutcome::Cancelled => {
+                println!("Cancelled: CSR generation requires a private key.");
+            }
+            CsrGenerationOutcome::CreatedKeyAndCsr => {
+                println!("Success: Generated {} and {}", key, csr);
+            }
+            CsrGenerationOutcome::UsedExistingKey => {
+                println!("Success: Generated {}", csr);
+            }
+        },
         Commands::Pfx {
             key,
             cert,
@@ -405,15 +430,33 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             let verify = !no_verify;
             match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
                 Ok(result) => {
+                    let audit_entry = record_validation_success(
+                        ActionKind::VerifyHttps,
+                        &host,
+                        port,
+                        verify,
+                        full_scan,
+                        &result,
+                    );
                     let report =
                         display::render_tls_check_result(&result, "HTTPS Endpoint Verification");
-                    print!("{report}");
                     if let Some(path) = out.as_deref() {
-                        write_verify_results(path, &report)?;
+                        write_verify_results(path, &report, Some(&audit_entry))?;
                     }
+                    print_validation_audit_feedback(&audit_entry);
+                    print!("{report}");
                 }
                 Err(e) => {
+                    let audit_entry = record_validation_failure(
+                        ActionKind::VerifyHttps,
+                        &host,
+                        port,
+                        verify,
+                        full_scan,
+                        &e,
+                    );
                     eprintln!("Error: {}", e);
+                    print_validation_audit_feedback(&audit_entry);
                 }
             }
         }
@@ -422,6 +465,8 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             port,
             no_verify,
             full_scan,
+            ldap_config_test,
+            ldap_port,
             out,
         } => {
             let (host, port) = normalize_tls_endpoint_target(&host, port, 636)?;
@@ -433,15 +478,34 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             let verify = !no_verify;
             match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
                 Ok(result) => {
-                    let report =
+                    let audit_entry = record_validation_success(
+                        ActionKind::VerifyLdaps,
+                        &host,
+                        port,
+                        verify,
+                        full_scan,
+                        &result,
+                    );
+                    let mut report =
                         display::render_tls_check_result(&result, "LDAPS Endpoint Verification");
-                    print!("{report}");
+                    append_ldap_config_test_report(&mut report, &host, ldap_config_test, ldap_port);
                     if let Some(path) = out.as_deref() {
-                        write_verify_results(path, &report)?;
+                        write_verify_results(path, &report, Some(&audit_entry))?;
                     }
+                    print_validation_audit_feedback(&audit_entry);
+                    print!("{report}");
                 }
                 Err(e) => {
+                    let audit_entry = record_validation_failure(
+                        ActionKind::VerifyLdaps,
+                        &host,
+                        port,
+                        verify,
+                        full_scan,
+                        &e,
+                    );
                     eprintln!("Error: {}", e);
+                    print_validation_audit_feedback(&audit_entry);
                 }
             }
         }
@@ -455,17 +519,35 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             let verify = !no_verify;
             match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
                 Ok(result) => {
+                    let audit_entry = record_validation_success(
+                        ActionKind::VerifySmtp,
+                        &host,
+                        port,
+                        verify,
+                        false,
+                        &result,
+                    );
                     let report = display::render_tls_check_result(
                         &result,
                         "SMTP STARTTLS Endpoint Verification",
                     );
-                    print!("{report}");
                     if let Some(path) = out.as_deref() {
-                        write_verify_results(path, &report)?;
+                        write_verify_results(path, &report, Some(&audit_entry))?;
                     }
+                    print_validation_audit_feedback(&audit_entry);
+                    print!("{report}");
                 }
                 Err(e) => {
+                    let audit_entry = record_validation_failure(
+                        ActionKind::VerifySmtp,
+                        &host,
+                        port,
+                        verify,
+                        false,
+                        &e,
+                    );
                     eprintln!("Error: {}", e);
+                    print_validation_audit_feedback(&audit_entry);
                 }
             }
         }
@@ -498,6 +580,79 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+enum CsrGenerationOutcome {
+    Cancelled,
+    CreatedKeyAndCsr,
+    UsedExistingKey,
+}
+
+fn prompt_new_key_password() -> Result<String> {
+    Ok(password("Enter password for new private key").interact()?)
+}
+
+fn prompt_existing_key_password() -> Result<Option<String>> {
+    let key_pass: String =
+        password("Enter password for existing private key (or press Enter if not encrypted)")
+            .allow_empty()
+            .interact()?;
+    Ok(if key_pass.is_empty() {
+        None
+    } else {
+        Some(key_pass)
+    })
+}
+
+fn generate_csr_with_optional_key_creation(
+    conf: &str,
+    key: &str,
+    csr: &str,
+    provided_password: Option<String>,
+) -> Result<CsrGenerationOutcome> {
+    if Path::new(key).exists() {
+        let key_password = if let Some(password) = provided_password {
+            if password.is_empty() {
+                None
+            } else {
+                Some(password)
+            }
+        } else {
+            prompt_existing_key_password()?
+        };
+
+        ssl_toolbox_core::key_csr::generate_csr(conf, key, csr, key_password.as_deref())?;
+        return Ok(CsrGenerationOutcome::UsedExistingKey);
+    }
+
+    let create_key = confirm(format!(
+        "No key exists at {}. Create a new key first?",
+        display_path(key)
+    ))
+    .initial_value(true)
+    .interact()?;
+
+    if !create_key {
+        return Ok(CsrGenerationOutcome::Cancelled);
+    }
+
+    let password = if let Some(password) = provided_password {
+        password
+    } else {
+        prompt_new_key_password()?
+    };
+
+    ssl_toolbox_core::key_csr::generate_key_and_csr(conf, key, csr, &password)?;
+    Ok(CsrGenerationOutcome::CreatedKeyAndCsr)
+}
+
+fn create_key_file(key: &str, provided_password: Option<String>) -> Result<()> {
+    let password = if let Some(password) = provided_password {
+        password
+    } else {
+        prompt_new_key_password()?
+    };
+    ssl_toolbox_core::key_csr::generate_private_key(key, &password)
 }
 
 fn execute_ca_command(
@@ -651,6 +806,26 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 select_active_profile(&mut app_config.ui_state)?;
             }
             0 => {
+                let key = prompt_path(
+                    &mut app_config.ui_state,
+                    "create_key.output",
+                    "Path to output .key file",
+                    None,
+                )?;
+
+                let job = build_create_key_job(
+                    &key,
+                    app_config.ui_state.workflow.active_profile.as_deref(),
+                );
+                show_preview_and_confirm(&job)?;
+
+                create_key_file(&key, None)?;
+                clear_screen()?;
+                println!("Success: Generated {}", display_path(&key));
+                finalize_job(&mut app_config.ui_state, job);
+                should_pause = true;
+            }
+            1 => {
                 let conf = prompt_path(
                     &mut app_config.ui_state,
                     "generate.conf",
@@ -681,18 +856,28 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 );
                 show_preview_and_confirm(&job)?;
 
-                let pass: String = password("Enter password for private key").interact()?;
-                ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
+                let outcome = generate_csr_with_optional_key_creation(&conf, &key, &csr, None)?;
                 clear_screen()?;
-                println!(
-                    "Success: Generated {} and {}",
-                    display_path(&key),
-                    display_path(&csr)
-                );
-                finalize_job(&mut app_config.ui_state, job);
+                match outcome {
+                    CsrGenerationOutcome::Cancelled => {
+                        println!("Cancelled: CSR generation requires a private key.");
+                    }
+                    CsrGenerationOutcome::CreatedKeyAndCsr => {
+                        println!(
+                            "Success: Generated {} and {}",
+                            display_path(&key),
+                            display_path(&csr)
+                        );
+                        finalize_job(&mut app_config.ui_state, job);
+                    }
+                    CsrGenerationOutcome::UsedExistingKey => {
+                        println!("Success: Generated {}", display_path(&csr));
+                        finalize_job(&mut app_config.ui_state, job);
+                    }
+                }
                 should_pause = true;
             }
-            1 => {
+            2 => {
                 let key = prompt_path(
                     &mut app_config.ui_state,
                     "pfx.key",
@@ -788,7 +973,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 finalize_job(&mut app_config.ui_state, job);
                 should_pause = true;
             }
-            2 => {
+            3 => {
                 let input_path = prompt_path(
                     &mut app_config.ui_state,
                     "pfx_legacy.input",
@@ -829,7 +1014,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 finalize_job(&mut app_config.ui_state, job);
                 should_pause = true;
             }
-            3 => {
+            4 => {
                 let inputs = prompt_config_inputs(
                     &effective_csr_defaults(&app_config.ui_state, &app_config.csr_defaults),
                     active_profile(&app_config.ui_state),
@@ -857,7 +1042,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 finalize_job(&mut app_config.ui_state, job);
                 should_pause = true;
             }
-            4 => {
+            5 => {
                 let input_path = prompt_path(
                     &mut app_config.ui_state,
                     "config_from_existing.input",
@@ -888,7 +1073,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 finalize_job(&mut app_config.ui_state, job);
                 should_pause = true;
             }
-            5 => {
+            6 => {
                 let input_path = prompt_path(
                     &mut app_config.ui_state,
                     "view_cert.input",
@@ -917,7 +1102,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 );
                 should_pause = true;
             }
-            6 => {
+            7 => {
                 let input_path = prompt_path(
                     &mut app_config.ui_state,
                     "view_csr.input",
@@ -958,7 +1143,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 );
                 should_pause = true;
             }
-            7 => {
+            8 => {
                 let input_path = prompt_path(
                     &mut app_config.ui_state,
                     "view_pfx.input",
@@ -998,7 +1183,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 );
                 should_pause = true;
             }
-            8 => {
+            9 => {
                 let raw_host: String = input("Hostname (e.g. example.com)").interact()?;
                 let port_str: String = input("Port").default_input("443").interact()?;
                 let requested_port: u16 = port_str.parse().unwrap_or(443);
@@ -1020,11 +1205,29 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     &host, port, verify, full_scan,
                 ) {
                     Ok(result) => {
+                        let audit_entry = record_validation_success(
+                            ActionKind::VerifyHttps,
+                            &host,
+                            port,
+                            verify,
+                            full_scan,
+                            &result,
+                        );
+                        print_validation_audit_feedback(&audit_entry);
                         display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
                         true
                     }
                     Err(e) => {
+                        let audit_entry = record_validation_failure(
+                            ActionKind::VerifyHttps,
+                            &host,
+                            port,
+                            verify,
+                            full_scan,
+                            &e,
+                        );
                         eprintln!("Error: {}", e);
+                        print_validation_audit_feedback(&audit_entry);
                         false
                     }
                 };
@@ -1036,12 +1239,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     )
                     .with_input("https_host", host)
                     .with_input("port", port.to_string())
+                    .with_input("verify", verify.to_string())
                     .with_input("full_scan", full_scan.to_string()),
                     success,
                 );
                 should_pause = true;
             }
-            9 => {
+            10 => {
                 let raw_host: String = input("Hostname (e.g. ldap.example.com)").interact()?;
                 let port_str: String = input("Port").default_input("636").interact()?;
                 let requested_port: u16 = port_str.parse().unwrap_or(636);
@@ -1052,6 +1256,17 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let full_scan: bool = confirm("Scan all supported protocol/cipher suites?")
                     .initial_value(false)
                     .interact()?;
+                let ldap_config_test: bool =
+                    confirm("Run unauthenticated LDAP base configuration test?")
+                        .initial_value(false)
+                        .interact()?;
+                let ldap_port: u16 = if ldap_config_test {
+                    let ldap_port_str: String =
+                        input("Plain LDAP port").default_input("389").interact()?;
+                    ldap_port_str.parse().unwrap_or(389)
+                } else {
+                    389
+                };
 
                 clear_screen()?;
                 println!(
@@ -1063,11 +1278,39 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     &host, port, verify, full_scan,
                 ) {
                     Ok(result) => {
-                        display::display_tls_check_result(&result, "LDAPS Endpoint Verification");
+                        let audit_entry = record_validation_success(
+                            ActionKind::VerifyLdaps,
+                            &host,
+                            port,
+                            verify,
+                            full_scan,
+                            &result,
+                        );
+                        print_validation_audit_feedback(&audit_entry);
+                        let mut report = display::render_tls_check_result(
+                            &result,
+                            "LDAPS Endpoint Verification",
+                        );
+                        append_ldap_config_test_report(
+                            &mut report,
+                            &host,
+                            ldap_config_test,
+                            ldap_port,
+                        );
+                        print!("{report}");
                         true
                     }
                     Err(e) => {
+                        let audit_entry = record_validation_failure(
+                            ActionKind::VerifyLdaps,
+                            &host,
+                            port,
+                            verify,
+                            full_scan,
+                            &e,
+                        );
                         eprintln!("Error: {}", e);
+                        print_validation_audit_feedback(&audit_entry);
                         false
                     }
                 };
@@ -1079,12 +1322,15 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                     )
                     .with_input("ldaps_host", host)
                     .with_input("port", port.to_string())
-                    .with_input("full_scan", full_scan.to_string()),
+                    .with_input("verify", verify.to_string())
+                    .with_input("full_scan", full_scan.to_string())
+                    .with_input("ldap_config_test", ldap_config_test.to_string())
+                    .with_input("ldap_port", ldap_port.to_string()),
                     success,
                 );
                 should_pause = true;
             }
-            10 => {
+            11 => {
                 let host: String = input("SMTP hostname (e.g. smtp.gmail.com)").interact()?;
                 let port_str: String = input("Port").default_input("587").interact()?;
                 let port: u16 = port_str.parse().unwrap_or(587);
@@ -1097,6 +1343,15 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let success =
                     match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
                         Ok(result) => {
+                            let audit_entry = record_validation_success(
+                                ActionKind::VerifySmtp,
+                                &host,
+                                port,
+                                verify,
+                                false,
+                                &result,
+                            );
+                            print_validation_audit_feedback(&audit_entry);
                             display::display_tls_check_result(
                                 &result,
                                 "SMTP STARTTLS Endpoint Verification",
@@ -1104,7 +1359,16 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                             true
                         }
                         Err(e) => {
+                            let audit_entry = record_validation_failure(
+                                ActionKind::VerifySmtp,
+                                &host,
+                                port,
+                                verify,
+                                false,
+                                &e,
+                            );
                             eprintln!("Error: {}", e);
+                            print_validation_audit_feedback(&audit_entry);
                             false
                         }
                     };
@@ -1115,12 +1379,13 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         format!("Verify SMTP endpoint {host}:{port}"),
                     )
                     .with_input("smtp_host", host)
+                    .with_input("verify", verify.to_string())
                     .with_input("port", port.to_string()),
                     success,
                 );
                 should_pause = true;
             }
-            11 => {
+            12 => {
                 let format: String = select("Target format")
                     .item("der".to_string(), "DER", "Binary ASN.1 encoding")
                     .item("pem".to_string(), "PEM", "Base64 with headers")
@@ -1180,7 +1445,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 finalize_job(&mut app_config.ui_state, job);
                 should_pause = true;
             }
-            12 => {
+            13 => {
                 let input_path = prompt_path(
                     &mut app_config.ui_state,
                     "identify.input",
@@ -1204,7 +1469,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 should_pause = true;
             }
             #[cfg(feature = "sectigo")]
-            13 => {
+            14 => {
                 let plugin = get_ca_plugin(debug)?;
 
                 let csr = prompt_path(
@@ -1320,7 +1585,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 should_pause = true;
             }
             #[cfg(feature = "sectigo")]
-            14 => {
+            15 => {
                 let plugin = get_ca_plugin(debug)?;
                 clear_screen()?;
                 match plugin.list_profiles(debug) {
@@ -1599,11 +1864,23 @@ fn build_new_config_job(
 fn build_generate_job(conf: &str, key: &str, csr: &str, profile: Option<&str>) -> JobRecord {
     let mut job = JobRecord::new(
         ActionKind::Generate,
-        format!("Generate key and CSR from {}", display_path(conf)),
+        format!("Generate CSR from {}", display_path(conf)),
     )
     .with_input("config", conf.to_string())
     .with_output("key", key.to_string())
     .with_output("csr", csr.to_string());
+    if let Some(profile) = profile {
+        job.profile = Some(profile.to_string());
+    }
+    job
+}
+
+fn build_create_key_job(key: &str, profile: Option<&str>) -> JobRecord {
+    let mut job = JobRecord::new(
+        ActionKind::CreateKey,
+        format!("Create key {}", display_path(key)),
+    )
+    .with_output("key", key.to_string());
     if let Some(profile) = profile {
         job.profile = Some(profile.to_string());
     }
@@ -1700,90 +1977,97 @@ fn build_main_menu() -> Vec<PaletteEntry> {
     let mut items = vec![
         PaletteEntry {
             action: 0,
-            alias: "g",
-            title: "Generate Key and CSR",
-            description: "Build a new key and CSR from a config file",
-            keywords: &["generate", "csr", "key"],
+            alias: "key",
+            title: "Create Key",
+            description: "Build a new encrypted private key",
+            keywords: &["key", "private", "rsa"],
         },
         PaletteEntry {
             action: 1,
+            alias: "g",
+            title: "Generate CSR",
+            description: "Use an existing key or create one if needed, then build a CSR",
+            keywords: &["generate", "csr", "key"],
+        },
+        PaletteEntry {
+            action: 2,
             alias: "pfx",
             title: "Create PFX",
             description: "Combine key and cert into a PFX file",
             keywords: &["pkcs12", "bundle", "export"],
         },
         PaletteEntry {
-            action: 2,
+            action: 3,
             alias: "legacy",
             title: "Create Legacy PFX",
             description: "Convert existing PFX to TripleDES-SHA1 format",
             keywords: &["legacy", "3des", "pkcs12"],
         },
         PaletteEntry {
-            action: 3,
+            action: 4,
             alias: "new",
             title: "Generate New OpenSSL Config",
             description: "Build a .cnf file from scratch via prompts",
             keywords: &["config", "openssl", "profile"],
         },
         PaletteEntry {
-            action: 4,
+            action: 5,
             alias: "config",
             title: "Generate Config from Cert/CSR",
             description: "Create a .cnf file from existing data",
             keywords: &["config", "csr", "certificate"],
         },
         PaletteEntry {
-            action: 5,
+            action: 6,
             alias: "cert",
             title: "View Certificate Details",
             description: "Display details of an existing certificate",
             keywords: &["inspect", "certificate", "x509"],
         },
         PaletteEntry {
-            action: 6,
+            action: 7,
             alias: "csr",
             title: "View CSR Details",
             description: "Display details of an existing CSR",
             keywords: &["inspect", "csr"],
         },
         PaletteEntry {
-            action: 7,
+            action: 8,
             alias: "vpfx",
             title: "View PFX Contents",
             description: "Display certs and chain inside a PFX/PKCS12 file",
             keywords: &["inspect", "pfx", "pkcs12"],
         },
         PaletteEntry {
-            action: 8,
+            action: 9,
             alias: "https",
             title: "Verify HTTPS Endpoint",
             description: "Check TLS cert and protocol for an HTTPS server",
             keywords: &["verify", "tls", "https"],
         },
         PaletteEntry {
-            action: 9,
+            action: 10,
             alias: "ldaps",
             title: "Verify LDAPS Endpoint",
             description: "Check TLS cert and protocol for an LDAPS server",
             keywords: &["verify", "tls", "ldap"],
         },
         PaletteEntry {
-            action: 10,
+            action: 11,
             alias: "smtp",
             title: "Verify SMTP Endpoint",
             description: "Check TLS cert via SMTP STARTTLS",
             keywords: &["verify", "tls", "mail"],
         },
         PaletteEntry {
-            action: 11,
+            action: 12,
             alias: "convert",
             title: "Convert Certificate Format",
             description: "Convert between PEM, DER, and Base64",
             keywords: &["convert", "pem", "der", "base64"],
         },
         PaletteEntry {
-            action: 12,
+            action: 13,
             alias: "id",
             title: "Identify Certificate Format",
             description: "Auto-detect a certificate file's format",
@@ -1794,14 +2078,14 @@ fn build_main_menu() -> Vec<PaletteEntry> {
     #[cfg(feature = "sectigo")]
     {
         items.push(PaletteEntry {
-            action: 13,
+            action: 14,
             alias: "submit",
             title: "CA: Submit CSR",
             description: "Submit CSR to CA for signing",
             keywords: &["ca", "submit", "sectigo"],
         });
         items.push(PaletteEntry {
-            action: 14,
+            action: 15,
             alias: "profiles",
             title: "CA: List Profiles",
             description: "View available SSL certificate types",
@@ -1829,6 +2113,7 @@ struct MenuGroup {
 
 fn compact_menu_title(item: &PaletteEntry) -> &'static str {
     match item.alias {
+        "key" => "Build Key",
         "g" => "Generate CSR",
         "pfx" => "Create PFX",
         "legacy" => "Legacy PFX",
@@ -1854,7 +2139,7 @@ fn menu_groups() -> Vec<MenuGroup> {
         MenuGroup {
             title: "Build",
             color: Color::Green,
-            aliases: &["g", "pfx", "legacy", "new", "config"],
+            aliases: &["key", "g", "pfx", "legacy", "new", "config"],
         },
         MenuGroup {
             title: "Inspect",
@@ -2507,6 +2792,7 @@ fn replay_recent_job(state: &mut settings::UiState, debug: bool, clone: bool) ->
     };
 
     match job.kind {
+        ActionKind::CreateKey => replay_create_key(state, &job, clone),
         ActionKind::Generate => replay_generate(state, &job, clone),
         ActionKind::CreatePfx => replay_pfx(state, &job, clone, false),
         ActionKind::CreateLegacyPfx => replay_pfx(state, &job, clone, true),
@@ -2654,11 +2940,154 @@ fn parse_endpoint_port(raw_port: &str, original: &str) -> Result<u16> {
     })
 }
 
-fn write_verify_results(path: &str, report: &str) -> Result<()> {
-    std::fs::write(path, report)
+fn record_validation_success(
+    kind: ActionKind,
+    host: &str,
+    port: u16,
+    verify: bool,
+    full_scan: bool,
+    result: &ssl_toolbox_core::TlsCheckResult,
+) -> audit::ValidationAuditEntry {
+    let history = settings::load_validation_log();
+    let previous = audit::find_previous_entry(&history, kind, host, port);
+    let entry = audit::build_success_entry(kind, host, port, verify, full_scan, result, previous);
+    persist_validation_audit_entry(&entry);
+    entry
+}
+
+fn record_validation_failure(
+    kind: ActionKind,
+    host: &str,
+    port: u16,
+    verify: bool,
+    full_scan: bool,
+    error: &anyhow::Error,
+) -> audit::ValidationAuditEntry {
+    let history = settings::load_validation_log();
+    let previous = audit::find_previous_entry(&history, kind, host, port);
+    let entry = audit::build_failure_entry(
+        kind,
+        host,
+        port,
+        verify,
+        full_scan,
+        error.to_string(),
+        previous,
+    );
+    persist_validation_audit_entry(&entry);
+    entry
+}
+
+fn persist_validation_audit_entry(entry: &audit::ValidationAuditEntry) {
+    if let Err(error) = settings::append_validation_log_entry(entry) {
+        eprintln!("Warning: could not append validation log: {}", error);
+    }
+}
+
+fn print_validation_audit_feedback(entry: &audit::ValidationAuditEntry) {
+    let path = settings::validation_log_path()
+        .map(|path| display_path(path.to_string_lossy().as_ref()))
+        .unwrap_or_else(|| "~/.ssl-toolbox/validation-log.jsonl".to_string());
+
+    println!(
+        "Audit: {} {}:{} at {}",
+        entry.kind.title(),
+        format_connect_target(&entry.host),
+        entry.port,
+        entry.timestamp_utc
+    );
+    println!("Audit Log: {}", path);
+    if let Some(previous) = &entry.comparison.previous_timestamp_utc {
+        println!("Changes Since {}:", previous);
+    } else {
+        println!("Changes:");
+    }
+    for change in entry.comparison.changes.iter().take(6) {
+        println!("  - {}", change);
+    }
+}
+
+fn render_verify_results_report(
+    report: &str,
+    audit_entry: Option<&audit::ValidationAuditEntry>,
+) -> String {
+    let Some(audit_entry) = audit_entry else {
+        return report.to_string();
+    };
+
+    let mut output = String::new();
+    output.push_str("Validation Audit\n");
+    output.push_str("================\n");
+    output.push_str(&format!("Timestamp (UTC): {}\n", audit_entry.timestamp_utc));
+    output.push_str(&format!("Action: {}\n", audit_entry.kind.title()));
+    output.push_str(&format!(
+        "Endpoint: {}:{}\n",
+        audit_entry.host, audit_entry.port
+    ));
+    output.push_str(&format!(
+        "Certificate Validation: {}\n",
+        if audit_entry.certificate_validation_requested {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    ));
+    output.push_str(&format!(
+        "Full Scan: {}\n",
+        if audit_entry.full_scan {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    ));
+    output.push_str(&format!(
+        "Outcome: {}\n",
+        match audit_entry.status {
+            audit::ValidationAuditStatus::Success => "Success",
+            audit::ValidationAuditStatus::Failure => "Failure",
+        }
+    ));
+    if let Some(previous) = &audit_entry.comparison.previous_timestamp_utc {
+        output.push_str(&format!("Compared To: {}\n", previous));
+    }
+    output.push_str("Changes:\n");
+    for change in &audit_entry.comparison.changes {
+        output.push_str(&format!("- {}\n", change));
+    }
+    output.push('\n');
+    output.push_str(report);
+    output
+}
+
+fn write_verify_results(
+    path: &str,
+    report: &str,
+    audit_entry: Option<&audit::ValidationAuditEntry>,
+) -> Result<()> {
+    std::fs::write(path, render_verify_results_report(report, audit_entry))
         .with_context(|| format!("Failed to write verify results to {}", path))?;
-    println!("Saved report to {}", path);
+    println!("Saved report to {}", display_path(path));
     Ok(())
+}
+
+fn append_ldap_config_test_report(report: &mut String, host: &str, enabled: bool, ldap_port: u16) {
+    if !enabled {
+        return;
+    }
+
+    println!(
+        "Checking unauthenticated LDAP base configuration on {}:{}...",
+        format_connect_target(host),
+        ldap_port
+    );
+    match ssl_toolbox_core::ldap::check_unauthenticated_base_config(host, ldap_port) {
+        Ok(result) => report.push_str(&display::render_ldap_config_check_result(&result)),
+        Err(error) => report.push_str(&display::render_ldap_config_check_error(
+            host,
+            ldap_port,
+            &error.to_string(),
+        )),
+    }
 }
 
 fn format_connect_target(host: &str) -> Cow<'_, str> {
@@ -2703,14 +3132,45 @@ fn replay_generate(state: &mut settings::UiState, job: &JobRecord, clone: bool) 
 
     let replay_job = build_generate_job(&conf, &key, &csr, job.profile.as_deref());
     show_preview_and_confirm(&replay_job)?;
-    let pass: String = password("Enter password for private key").interact()?;
-    ssl_toolbox_core::key_csr::generate_key_and_csr(&conf, &key, &csr, &pass)?;
+    let outcome = generate_csr_with_optional_key_creation(&conf, &key, &csr, None)?;
     clear_screen()?;
-    println!(
-        "Success: Generated {} and {}",
-        display_path(&key),
-        display_path(&csr)
-    );
+    match outcome {
+        CsrGenerationOutcome::Cancelled => {
+            println!("Cancelled: CSR generation requires a private key.");
+        }
+        CsrGenerationOutcome::CreatedKeyAndCsr => {
+            println!(
+                "Success: Generated {} and {}",
+                display_path(&key),
+                display_path(&csr)
+            );
+            finalize_job(state, replay_job);
+        }
+        CsrGenerationOutcome::UsedExistingKey => {
+            println!("Success: Generated {}", display_path(&csr));
+            finalize_job(state, replay_job);
+        }
+    }
+    Ok(())
+}
+
+fn replay_create_key(state: &mut settings::UiState, job: &JobRecord, clone: bool) -> Result<()> {
+    let key = if clone {
+        prompt_path(
+            state,
+            "create_key.output",
+            "Path to output .key file",
+            seeded_value(job, "key"),
+        )?
+    } else {
+        seeded_value(job, "key").ok_or_else(|| anyhow::anyhow!("Missing key path"))?
+    };
+
+    let replay_job = build_create_key_job(&key, job.profile.as_deref());
+    show_preview_and_confirm(&replay_job)?;
+    create_key_file(&key, None)?;
+    clear_screen()?;
+    println!("Success: Generated {}", display_path(&key));
     finalize_job(state, replay_job);
     Ok(())
 }
@@ -3072,7 +3532,7 @@ fn replay_verify_endpoint(
         .with_input(host_key, host.clone())
         .with_input("port", port.to_string());
     let verify = confirm("Validate certificate?")
-        .initial_value(true)
+        .initial_value(seeded_bool(job, "verify", true))
         .interact()?;
     let full_scan = if matches!(kind, ActionKind::VerifyHttps | ActionKind::VerifyLdaps) {
         confirm("Scan all supported protocol/cipher suites?")
@@ -3081,7 +3541,29 @@ fn replay_verify_endpoint(
     } else {
         false
     };
-    let replay_job = replay_job.with_input("full_scan", full_scan.to_string());
+    let ldap_config_test = if matches!(kind, ActionKind::VerifyLdaps) {
+        confirm("Run unauthenticated LDAP base configuration test?")
+            .initial_value(seeded_bool(job, "ldap_config_test", false))
+            .interact()?
+    } else {
+        false
+    };
+    let ldap_port = if ldap_config_test {
+        let ldap_port_str: String = input("Plain LDAP port")
+            .default_input(seeded_value(job, "ldap_port").as_deref().unwrap_or("389"))
+            .interact()?;
+        ldap_port_str.parse().unwrap_or(389)
+    } else {
+        389
+    };
+    let mut replay_job = replay_job
+        .with_input("verify", verify.to_string())
+        .with_input("full_scan", full_scan.to_string());
+    if matches!(kind, ActionKind::VerifyLdaps) {
+        replay_job = replay_job
+            .with_input("ldap_config_test", ldap_config_test.to_string())
+            .with_input("ldap_port", ldap_port.to_string());
+    }
     clear_screen()?;
     println!(
         "\nConnecting to {}:{}...",
@@ -3090,12 +3572,38 @@ fn replay_verify_endpoint(
     );
     match kind {
         ActionKind::VerifyHttps | ActionKind::VerifyLdaps => {
-            let result = ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan)?;
-            display::display_tls_check_result(&result, kind.title());
+            match ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan) {
+                Ok(result) => {
+                    let audit_entry =
+                        record_validation_success(kind, &host, port, verify, full_scan, &result);
+                    print_validation_audit_feedback(&audit_entry);
+                    let mut report = display::render_tls_check_result(&result, kind.title());
+                    append_ldap_config_test_report(&mut report, &host, ldap_config_test, ldap_port);
+                    print!("{report}");
+                }
+                Err(error) => {
+                    let audit_entry =
+                        record_validation_failure(kind, &host, port, verify, full_scan, &error);
+                    print_validation_audit_feedback(&audit_entry);
+                    return Err(error);
+                }
+            }
         }
         ActionKind::VerifySmtp => {
-            let result = ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify)?;
-            display::display_tls_check_result(&result, kind.title());
+            match ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify) {
+                Ok(result) => {
+                    let audit_entry =
+                        record_validation_success(kind, &host, port, verify, full_scan, &result);
+                    print_validation_audit_feedback(&audit_entry);
+                    display::display_tls_check_result(&result, kind.title());
+                }
+                Err(error) => {
+                    let audit_entry =
+                        record_validation_failure(kind, &host, port, verify, full_scan, &error);
+                    print_validation_audit_feedback(&audit_entry);
+                    return Err(error);
+                }
+            }
         }
         _ => {}
     }
@@ -3229,6 +3737,7 @@ fn replay_ca_submit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::{ValidationAuditEntry, ValidationAuditStatus, ValidationComparison};
 
     fn sample_config_inputs() -> ConfigInputs {
         ConfigInputs {
@@ -3460,13 +3969,45 @@ mod tests {
                 port,
                 no_verify,
                 full_scan,
+                ldap_config_test,
+                ldap_port,
                 out,
             }) => {
                 assert_eq!(host, "ldap.example.com");
                 assert_eq!(port, 636);
                 assert!(!no_verify);
                 assert!(!full_scan);
+                assert!(!ldap_config_test);
+                assert_eq!(ldap_port, 389);
                 assert_eq!(out.as_deref(), Some("ldaps.txt"));
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn verify_ldaps_accepts_ldap_config_test_flags() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-ldaps",
+            "--host",
+            "ldap.example.com",
+            "--ldap-config-test",
+            "--ldap-port",
+            "1389",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifyLdaps {
+                host,
+                ldap_config_test,
+                ldap_port,
+                ..
+            }) => {
+                assert_eq!(host, "ldap.example.com");
+                assert!(ldap_config_test);
+                assert_eq!(ldap_port, 1389);
             }
             _ => panic!("unexpected command"),
         }
@@ -3498,5 +4039,33 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn render_verify_results_report_adds_timestamped_audit_header() {
+        let audit_entry = ValidationAuditEntry {
+            timestamp_secs: 1_704_067_200,
+            timestamp_utc: "2024-01-01T00:00:00Z".to_string(),
+            kind: ActionKind::VerifyLdaps,
+            host: "ldap.example.com".to_string(),
+            port: 636,
+            certificate_validation_requested: true,
+            full_scan: true,
+            status: ValidationAuditStatus::Success,
+            result: None,
+            error: None,
+            comparison: ValidationComparison {
+                previous_timestamp_utc: Some("2023-12-31T00:00:00Z".to_string()),
+                changes: vec!["Leaf certificate SHA256 fingerprint changed.".to_string()],
+            },
+        };
+
+        let rendered = render_verify_results_report("raw report body", Some(&audit_entry));
+
+        assert!(rendered.contains("Timestamp (UTC): 2024-01-01T00:00:00Z"));
+        assert!(rendered.contains("Action: Verify LDAPS Endpoint"));
+        assert!(rendered.contains("Compared To: 2023-12-31T00:00:00Z"));
+        assert!(rendered.contains("- Leaf certificate SHA256 fingerprint changed."));
+        assert!(rendered.ends_with("raw report body"));
     }
 }

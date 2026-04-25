@@ -29,6 +29,7 @@ cargo build --release
 
 # Or use CLI commands directly
 ./target/release/ssl-toolbox new-config --out server.cnf
+./target/release/ssl-toolbox key --key server.key
 ./target/release/ssl-toolbox generate --conf server.cnf --key server.key --csr server.csr
 ```
 
@@ -114,7 +115,8 @@ SCM_CLIENT_SECRET=<your client secret>
 |---|---|
 | *(no args)* | Launch interactive menu |
 | `init [--global]` | Generate template config files |
-| `generate --conf FILE --key FILE --csr FILE [--password PASS]` | Generate RSA key and CSR |
+| `key --key FILE [--password PASS]` | Generate an encrypted RSA private key |
+| `generate --conf FILE --key FILE --csr FILE [--password PASS]` | Generate a CSR with an existing key, or create the key first if needed |
 | `new-config [--out FILE]` | Build OpenSSL config interactively |
 | `config --input FILE --out FILE [--is-csr]` | Extract config from cert or CSR |
 | `pfx --key FILE --cert FILE --out FILE [--chain FILE] [--legacy]` | Create PFX file |
@@ -123,7 +125,7 @@ SCM_CLIENT_SECRET=<your client secret>
 | `view-csr --input FILE` | Display CSR details |
 | `view-pfx --input FILE` | Display PFX contents |
 | `verify-https --host HOST [--port PORT] [--no-verify] [--full-scan] [--out FILE]` | Check HTTPS endpoint |
-| `verify-ldaps --host HOST [--port PORT] [--no-verify] [--full-scan] [--out FILE]` | Check LDAPS endpoint |
+| `verify-ldaps --host HOST [--port PORT] [--no-verify] [--full-scan] [--ldap-config-test] [--ldap-port PORT] [--out FILE]` | Check LDAPS endpoint |
 | `verify-smtp --host HOST [--port PORT] [--no-verify] [--out FILE]` | Check SMTP STARTTLS endpoint |
 | `convert --input FILE --output FILE --format FORMAT` | Convert cert format (pem/der/base64) |
 | `identify --input FILE` | Auto-detect certificate format |

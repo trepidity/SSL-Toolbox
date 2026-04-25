@@ -8,6 +8,7 @@ use ssl_toolbox_core::CsrDefaults;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ActionKind {
+    CreateKey,
     Generate,
     CreatePfx,
     CreateLegacyPfx,
@@ -28,6 +29,7 @@ pub enum ActionKind {
 impl ActionKind {
     pub fn alias(self) -> &'static str {
         match self {
+            Self::CreateKey => "key",
             Self::Generate => "g",
             Self::CreatePfx => "pfx",
             Self::CreateLegacyPfx => "legacy",
@@ -48,7 +50,8 @@ impl ActionKind {
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::Generate => "Generate Key and CSR",
+            Self::CreateKey => "Create Key",
+            Self::Generate => "Generate CSR",
             Self::CreatePfx => "Create PFX",
             Self::CreateLegacyPfx => "Create Legacy PFX",
             Self::NewConfig => "Generate New OpenSSL Config",
@@ -655,6 +658,7 @@ pub struct ValidationStep {
 
 pub fn validation_steps(job: &JobRecord) -> Vec<ValidationStep> {
     match job.kind {
+        ActionKind::CreateKey => Vec::new(),
         ActionKind::Generate => job
             .outputs
             .get("csr")
@@ -756,6 +760,13 @@ fn shell_quote(value: &str) -> String {
 
 pub fn next_steps(job: &JobRecord, memory: &WorkflowMemory) -> Vec<String> {
     match job.kind {
+        ActionKind::CreateKey => {
+            let mut steps = vec!["Generate a CSR from this key and your config file.".to_string()];
+            if let Some(key) = memory.key.as_deref() {
+                steps.push(format!("Next likely file: {key}"));
+            }
+            steps
+        }
         ActionKind::Generate => {
             let mut steps = vec![
                 "View the CSR details to confirm subject and SANs.".to_string(),

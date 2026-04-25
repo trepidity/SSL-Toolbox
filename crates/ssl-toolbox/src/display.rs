@@ -1,7 +1,9 @@
 use std::fmt::Write as _;
 
+use crossterm::style::Stylize;
 use ssl_toolbox_core::{
-    CertDetails, CertValidation, PfxDetails, PrivateKeySummary, TlsCheckResult,
+    CertDetails, CertValidation, LdapConfigCheckResult, PfxDetails, PrivateKeySummary,
+    TlsCheckResult,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -372,10 +374,6 @@ pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
         .unwrap();
     }
 
-    if let Some(validation) = &result.validation {
-        render_validation(validation, &mut output);
-    }
-
     if result.cert_chain.is_empty() {
         writeln!(&mut output, "  No certificates presented by server.\n").unwrap();
     } else {
@@ -384,6 +382,94 @@ pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
             "Certificate Chain",
         ));
     }
+
+    if let Some(validation) = &result.validation {
+        render_validation(validation, &mut output);
+    }
+
+    output
+}
+
+pub fn render_ldap_config_check_result(result: &LdapConfigCheckResult) -> String {
+    let mut output = String::new();
+
+    writeln!(
+        &mut output,
+        "\n╔═══════════════════════════════════════════════════════════════╗"
+    )
+    .unwrap();
+    writeln!(&mut output, "║  {:^59}  ║", "LDAP Base Configuration Test").unwrap();
+    writeln!(
+        &mut output,
+        "╚═══════════════════════════════════════════════════════════════╝\n"
+    )
+    .unwrap();
+
+    writeln!(
+        &mut output,
+        "  Endpoint: ldap://{}:{}",
+        result.host, result.port
+    )
+    .unwrap();
+    writeln!(
+        &mut output,
+        "  Authentication: Unauthenticated anonymous bind"
+    )
+    .unwrap();
+    writeln!(&mut output, "  Search Base: RootDSE").unwrap();
+    writeln!(&mut output).unwrap();
+
+    writeln!(
+        &mut output,
+        "┌─ RootDSE Attributes ────────────────────────────────────────"
+    )
+    .unwrap();
+    if result.attributes.is_empty() {
+        writeln!(&mut output, "│  No attributes returned").unwrap();
+    } else {
+        for attr in &result.attributes {
+            writeln!(&mut output, "│  {}", attr.name).unwrap();
+            if attr.values.is_empty() {
+                writeln!(&mut output, "│    None").unwrap();
+            } else {
+                for value in &attr.values {
+                    writeln!(&mut output, "│    • {}", value).unwrap();
+                }
+            }
+        }
+    }
+    writeln!(
+        &mut output,
+        "└────────────────────────────────────────────────────────────────\n"
+    )
+    .unwrap();
+
+    output
+}
+
+pub fn render_ldap_config_check_error(host: &str, port: u16, error: &str) -> String {
+    let mut output = String::new();
+
+    writeln!(
+        &mut output,
+        "\n╔═══════════════════════════════════════════════════════════════╗"
+    )
+    .unwrap();
+    writeln!(&mut output, "║  {:^59}  ║", "LDAP Base Configuration Test").unwrap();
+    writeln!(
+        &mut output,
+        "╚═══════════════════════════════════════════════════════════════╝\n"
+    )
+    .unwrap();
+
+    writeln!(&mut output, "  Endpoint: ldap://{}:{}", host, port).unwrap();
+    writeln!(
+        &mut output,
+        "  Authentication: Unauthenticated anonymous bind"
+    )
+    .unwrap();
+    writeln!(&mut output, "  Result: FAIL ({error})").unwrap();
+    writeln!(&mut output).unwrap();
 
     output
 }
@@ -398,34 +484,31 @@ fn render_validation(validation: &CertValidation, output: &mut String) {
     if let Some(ref hostname) = validation.hostname_match {
         let marker = if hostname.passed { "+" } else { "-" };
         let label = if hostname.passed { "Pass" } else { "FAIL" };
-        writeln!(
-            output,
+        let line = format!(
             "│  [{}] Hostname Match: {} ({})",
             marker, label, hostname.message
-        )
-        .unwrap();
+        );
+        write_validation_line(output, hostname.passed, line);
     }
 
     if let Some(ref expiry) = validation.expiry_check {
         let marker = if expiry.passed { "+" } else { "-" };
         let label = if expiry.passed { "Pass" } else { "FAIL" };
-        writeln!(
-            output,
+        let line = format!(
             "│  [{}] Expiry Check:   {} ({})",
             marker, label, expiry.message
-        )
-        .unwrap();
+        );
+        write_validation_line(output, expiry.passed, line);
     }
 
     if let Some(ref chain) = validation.chain_valid {
         let marker = if chain.passed { "+" } else { "-" };
         let label = if chain.passed { "Pass" } else { "FAIL" };
-        writeln!(
-            output,
+        let line = format!(
             "│  [{}] Chain Valid:     {} ({})",
             marker, label, chain.message
-        )
-        .unwrap();
+        );
+        write_validation_line(output, chain.passed, line);
     }
 
     writeln!(
@@ -433,6 +516,14 @@ fn render_validation(validation: &CertValidation, output: &mut String) {
         "└────────────────────────────────────────────────────────────────\n"
     )
     .unwrap();
+}
+
+fn write_validation_line(output: &mut String, passed: bool, line: String) {
+    if passed {
+        writeln!(output, "{line}").unwrap();
+    } else {
+        writeln!(output, "{}", line.red()).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +576,32 @@ mod tests {
         assert!(rendered.contains("Certificate Validation"));
         assert!(rendered.contains("Certificate Chain"));
         assert!(rendered.contains("CommonName: example.com"));
+        assert!(
+            rendered.find("Certificate Chain").unwrap()
+                < rendered.find("Certificate Validation").unwrap()
+        );
+    }
+
+    #[test]
+    fn render_validation_colors_failing_checks() {
+        let validation = CertValidation {
+            hostname_match: None,
+            expiry_check: None,
+            chain_valid: Some(ValidationResult {
+                passed: false,
+                message: "chain failed".to_string(),
+            }),
+        };
+        let mut rendered = String::new();
+
+        render_validation(&validation, &mut rendered);
+
+        let chain_line = rendered
+            .lines()
+            .find(|line| line.contains("Chain Valid"))
+            .unwrap();
+        assert!(chain_line.starts_with("\x1b["));
+        assert!(chain_line.contains("│  [-] Chain Valid:     FAIL (chain failed)"));
     }
 
     #[test]
