@@ -124,6 +124,13 @@ pub fn x509_to_cert_details(cert: &X509Ref) -> CertDetails {
     }
 }
 
+pub fn x509_to_pem_string(cert: &X509Ref) -> Result<String> {
+    let pem = cert
+        .to_pem()
+        .context("Failed to encode certificate as PEM")?;
+    String::from_utf8(pem).context("PEM certificate contained invalid UTF-8")
+}
+
 fn push_unique_cert(cert: &X509Ref, chain: &mut Vec<X509>, seen: &mut HashSet<Vec<u8>>) {
     let Ok(der) = cert.to_der() else {
         return;

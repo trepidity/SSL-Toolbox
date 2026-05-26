@@ -83,6 +83,8 @@ pub struct TlsCheckResult {
     pub port: u16,
     pub cipher: CipherInfo,
     pub cert_chain: Vec<CertDetails>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cert_chain_pem: Vec<String>,
     pub version_support: Vec<TlsVersionProbeResult>,
     pub cipher_scan: Vec<TlsCipherScanResult>,
     pub validation: Option<CertValidation>,

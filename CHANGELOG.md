@@ -4,6 +4,14 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.0.4 — 2026-05-26
+
+### feat: export endpoint certificate chains
+
+Added `--export-certs DIR` to HTTPS and LDAPS verification so returned certificate chains can be saved as one PEM file per certificate. Interactive HTTPS/LDAPS checks can also export the same PEM files, preserving the displayed chain order.
+
+---
+
 ## v2.0.3 — 2026-04-21
 
 ### fix: preserve certificate chain order and reuse chain rendering
