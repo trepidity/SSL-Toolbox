@@ -250,6 +250,7 @@ Every verification populates a `TlsCheckResult` with:
 - `host`, `port`
 - `cipher: CipherInfo` — negotiated cipher's standard name (falling back to OpenSSL internal name), secret bits, and TLS version string
 - `cert_chain: Vec<CertDetails>` — leaf-first, deduplicated by DER
+- `cert_chain_pem: Vec<String>` — the same returned certificates encoded as PEM, used by `--export-certs`
 - `version_support: Vec<TlsVersionProbeResult>` — per-protocol handshake result for TLS 1.0, 1.1, 1.2, 1.3 (empty for SMTP; see 6.4)
 - `cipher_scan: Vec<TlsCipherScanResult>` — populated only when `--full-scan` is passed
 - `validation: Option<CertValidation>` — populated only when verification is enabled

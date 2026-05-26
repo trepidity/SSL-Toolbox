@@ -133,6 +133,9 @@ enum Commands {
         /// Save results to a file
         #[arg(short, long)]
         out: Option<String>,
+        /// Export returned certificate chain as one PEM file per certificate into DIR
+        #[arg(long, value_name = "DIR")]
+        export_certs: Option<String>,
     },
     /// Verify TLS certificate and protocol for an LDAPS endpoint
     VerifyLdaps {
@@ -161,6 +164,9 @@ enum Commands {
         /// Save results to a file
         #[arg(short, long)]
         out: Option<String>,
+        /// Export returned certificate chain as one PEM file per certificate into DIR
+        #[arg(long, value_name = "DIR")]
+        export_certs: Option<String>,
     },
     /// Verify TLS certificate via SMTP STARTTLS
     VerifySmtp {
@@ -426,6 +432,7 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             no_verify,
             full_scan,
             out,
+            export_certs,
         } => {
             let (host, port) = normalize_tls_endpoint_target(&host, port, 443)?;
             println!(
@@ -448,6 +455,9 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                         display::render_tls_check_result(&result, "HTTPS Endpoint Verification");
                     if let Some(path) = out.as_deref() {
                         write_verify_results(path, &report, Some(&audit_entry))?;
+                    }
+                    if let Some(dir) = export_certs.as_deref() {
+                        export_cert_chain_pem_and_print(&result, dir)?;
                     }
                     print_validation_audit_feedback(&audit_entry);
                     print!("{report}");
@@ -476,6 +486,7 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             ldap_bind_dn,
             ldap_bind_password,
             out,
+            export_certs,
         } => {
             let (host, port) = normalize_tls_endpoint_target(&host, port, 636)?;
             let ldap_config_options = ldap_config_test_options_from_cli(
@@ -502,13 +513,12 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                     );
                     let mut report =
                         display::render_tls_check_result(&result, "LDAPS Endpoint Verification");
-                    append_ldap_config_test_report(
-                        &mut report,
-                        &host,
-                        &ldap_config_options,
-                    );
+                    append_ldap_config_test_report(&mut report, &host, &ldap_config_options);
                     if let Some(path) = out.as_deref() {
                         write_verify_results(path, &report, Some(&audit_entry))?;
+                    }
+                    if let Some(dir) = export_certs.as_deref() {
+                        export_cert_chain_pem_and_print(&result, dir)?;
                     }
                     print_validation_audit_feedback(&audit_entry);
                     print!("{report}");
@@ -685,13 +695,21 @@ fn prompt_ldap_config_test_options(
     let prefer_authenticated = seeded_bind_mode == Some("authenticated");
     let bind_mode: String = if prefer_authenticated {
         select("LDAP bind type")
-            .item("authenticated".to_string(), "Authenticated", "Simple bind with DN and password")
+            .item(
+                "authenticated".to_string(),
+                "Authenticated",
+                "Simple bind with DN and password",
+            )
             .item("anonymous".to_string(), "Anonymous", "No bind credentials")
             .interact()?
     } else {
         select("LDAP bind type")
             .item("anonymous".to_string(), "Anonymous", "No bind credentials")
-            .item("authenticated".to_string(), "Authenticated", "Simple bind with DN and password")
+            .item(
+                "authenticated".to_string(),
+                "Authenticated",
+                "Simple bind with DN and password",
+            )
             .interact()?
     };
 
@@ -1323,6 +1341,7 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let full_scan: bool = confirm("Scan all supported protocol/cipher suites?")
                     .initial_value(false)
                     .interact()?;
+                let export_certs = prompt_certificate_export_dir(&host, port)?;
 
                 clear_screen()?;
                 println!(
@@ -1343,6 +1362,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                             &result,
                         );
                         print_validation_audit_feedback(&audit_entry);
+                        if let Some(dir) = export_certs.as_deref() {
+                            export_cert_chain_pem_and_print(&result, dir)?;
+                        }
                         display::display_tls_check_result(&result, "HTTPS Endpoint Verification");
                         true
                     }
@@ -1360,18 +1382,18 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                         false
                     }
                 };
-                finalize_job_if_success(
-                    &mut app_config.ui_state,
-                    JobRecord::new(
-                        ActionKind::VerifyHttps,
-                        format!("Verify HTTPS endpoint {host}:{port}"),
-                    )
-                    .with_input("https_host", host)
-                    .with_input("port", port.to_string())
-                    .with_input("verify", verify.to_string())
-                    .with_input("full_scan", full_scan.to_string()),
-                    success,
-                );
+                let mut job = JobRecord::new(
+                    ActionKind::VerifyHttps,
+                    format!("Verify HTTPS endpoint {host}:{port}"),
+                )
+                .with_input("https_host", host)
+                .with_input("port", port.to_string())
+                .with_input("verify", verify.to_string())
+                .with_input("full_scan", full_scan.to_string());
+                if let Some(dir) = export_certs {
+                    job = job.with_output("cert_export_dir", dir);
+                }
+                finalize_job_if_success(&mut app_config.ui_state, job, success);
                 should_pause = true;
             }
             10 => {
@@ -1385,12 +1407,12 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 let full_scan: bool = confirm("Scan all supported protocol/cipher suites?")
                     .initial_value(false)
                     .interact()?;
-                let ldap_config_test: bool =
-                    confirm("Run LDAP base configuration test?")
-                        .initial_value(false)
-                        .interact()?;
+                let ldap_config_test: bool = confirm("Run LDAP base configuration test?")
+                    .initial_value(false)
+                    .interact()?;
                 let ldap_config_options =
                     prompt_ldap_config_test_options(ldap_config_test, port, None, None)?;
+                let export_certs = prompt_certificate_export_dir(&host, port)?;
 
                 clear_screen()?;
                 println!(
@@ -1411,15 +1433,14 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                             &result,
                         );
                         print_validation_audit_feedback(&audit_entry);
+                        if let Some(dir) = export_certs.as_deref() {
+                            export_cert_chain_pem_and_print(&result, dir)?;
+                        }
                         let mut report = display::render_tls_check_result(
                             &result,
                             "LDAPS Endpoint Verification",
                         );
-                        append_ldap_config_test_report(
-                            &mut report,
-                            &host,
-                            &ldap_config_options,
-                        );
+                        append_ldap_config_test_report(&mut report, &host, &ldap_config_options);
                         print!("{report}");
                         true
                     }
@@ -1450,6 +1471,9 @@ fn run_interactive_menu(debug: bool) -> Result<()> {
                 .with_input("ldap_bind", ldap_config_options.bind_mode().to_string());
                 if let Some(bind_dn) = ldap_config_options.bind_dn() {
                     job = job.with_input("ldap_bind_dn", bind_dn.to_string());
+                }
+                if let Some(dir) = export_certs {
+                    job = job.with_output("cert_export_dir", dir);
                 }
                 finalize_job_if_success(&mut app_config.ui_state, job, success);
                 should_pause = true;
@@ -3194,6 +3218,118 @@ fn write_verify_results(
     Ok(())
 }
 
+fn prompt_certificate_export_dir(host: &str, port: u16) -> Result<Option<String>> {
+    prompt_certificate_export_dir_with_default(host, port, None)
+}
+
+fn prompt_certificate_export_dir_with_default(
+    host: &str,
+    port: u16,
+    default_dir: Option<&str>,
+) -> Result<Option<String>> {
+    let export: bool = confirm("Export returned certificates to PEM files?")
+        .initial_value(default_dir.is_some())
+        .interact()?;
+    if !export {
+        return Ok(None);
+    }
+
+    let default_dir = default_dir
+        .map(str::to_string)
+        .unwrap_or_else(|| default_certificate_export_dir(host, port));
+    let raw: String = input("Certificate export directory")
+        .default_input(&default_dir)
+        .interact()?;
+
+    Ok(Some(resolve_path(&raw)))
+}
+
+fn default_certificate_export_dir(host: &str, port: u16) -> String {
+    format!("{}-{}-certs", sanitize_filename_component(host), port)
+}
+
+fn export_cert_chain_pem_and_print(
+    result: &ssl_toolbox_core::TlsCheckResult,
+    dir: &str,
+) -> Result<()> {
+    let exported = export_cert_chain_pem(result, Path::new(dir))?;
+    if exported.is_empty() {
+        println!("Exported certificates: no certificates presented by server");
+        return Ok(());
+    }
+
+    println!("Exported certificates:");
+    for path in exported {
+        println!("  - {}", display_path(&path.display().to_string()));
+    }
+    Ok(())
+}
+
+fn export_cert_chain_pem(
+    result: &ssl_toolbox_core::TlsCheckResult,
+    dir: &Path,
+) -> Result<Vec<PathBuf>> {
+    if result.cert_chain_pem.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    std::fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "Failed to create certificate export directory {}",
+            dir.display()
+        )
+    })?;
+
+    let host = sanitize_filename_component(&result.host);
+    let mut exported = Vec::new();
+    for (idx, pem) in result.cert_chain_pem.iter().enumerate() {
+        let role = certificate_export_role(idx, result.cert_chain_pem.len());
+        let path = dir.join(format!(
+            "{}-{}-cert-{:02}-{}.pem",
+            host,
+            result.port,
+            idx + 1,
+            role
+        ));
+        std::fs::write(&path, pem.as_bytes())
+            .with_context(|| format!("Failed to write certificate PEM to {}", path.display()))?;
+        exported.push(path);
+    }
+
+    Ok(exported)
+}
+
+fn certificate_export_role(idx: usize, len: usize) -> &'static str {
+    if len == 1 {
+        "certificate"
+    } else if idx == 0 {
+        "leaf"
+    } else {
+        "chain"
+    }
+}
+
+fn sanitize_filename_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches(['.', '-', '_'])
+        .to_string();
+
+    if sanitized.is_empty() {
+        "host".to_string()
+    } else {
+        sanitized
+    }
+}
+
 fn append_ldap_config_test_report(
     report: &mut String,
     host: &str,
@@ -3692,6 +3828,15 @@ fn replay_verify_endpoint(
     } else {
         LdapConfigTestOptions::disabled(ldap_port)
     };
+    let export_certs = if matches!(kind, ActionKind::VerifyHttps | ActionKind::VerifyLdaps) {
+        prompt_certificate_export_dir_with_default(
+            &host,
+            port,
+            seeded_value(job, "cert_export_dir").as_deref(),
+        )?
+    } else {
+        None
+    };
     let mut replay_job = replay_job
         .with_input("verify", verify.to_string())
         .with_input("full_scan", full_scan.to_string());
@@ -3703,6 +3848,9 @@ fn replay_verify_endpoint(
         if let Some(bind_dn) = ldap_config_options.bind_dn() {
             replay_job = replay_job.with_input("ldap_bind_dn", bind_dn.to_string());
         }
+    }
+    if let Some(dir) = export_certs.as_deref() {
+        replay_job = replay_job.with_output("cert_export_dir", dir.to_string());
     }
     clear_screen()?;
     println!(
@@ -3717,6 +3865,9 @@ fn replay_verify_endpoint(
                     let audit_entry =
                         record_validation_success(kind, &host, port, verify, full_scan, &result);
                     print_validation_audit_feedback(&audit_entry);
+                    if let Some(dir) = export_certs.as_deref() {
+                        export_cert_chain_pem_and_print(&result, dir)?;
+                    }
                     let mut report = display::render_tls_check_result(&result, kind.title());
                     append_ldap_config_test_report(&mut report, &host, &ldap_config_options);
                     print!("{report}");
@@ -4080,12 +4231,34 @@ mod tests {
                 no_verify,
                 full_scan,
                 out,
+                export_certs,
             }) => {
                 assert_eq!(host, "example.com");
                 assert_eq!(port, 443);
                 assert!(!no_verify);
                 assert!(!full_scan);
                 assert_eq!(out.as_deref(), Some("report.txt"));
+                assert_eq!(export_certs, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn verify_https_accepts_export_certs_flag() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-https",
+            "--host",
+            "example.com",
+            "--export-certs",
+            "certs",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifyHttps { export_certs, .. }) => {
+                assert_eq!(export_certs.as_deref(), Some("certs"));
             }
             _ => panic!("unexpected command"),
         }
@@ -4114,6 +4287,7 @@ mod tests {
                 ldap_bind_dn,
                 ldap_bind_password,
                 out,
+                export_certs,
             }) => {
                 assert_eq!(host, "ldap.example.com");
                 assert_eq!(port, 636);
@@ -4124,6 +4298,27 @@ mod tests {
                 assert_eq!(ldap_bind_dn, None);
                 assert_eq!(ldap_bind_password, None);
                 assert_eq!(out.as_deref(), Some("ldaps.txt"));
+                assert_eq!(export_certs, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn verify_ldaps_accepts_export_certs_flag() {
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "verify-ldaps",
+            "--host",
+            "ldap.example.com",
+            "--export-certs",
+            "ldaps-certs",
+        ])
+        .expect("parsed cli");
+
+        match cli.command {
+            Some(Commands::VerifyLdaps { export_certs, .. }) => {
+                assert_eq!(export_certs.as_deref(), Some("ldaps-certs"));
             }
             _ => panic!("unexpected command"),
         }
@@ -4185,6 +4380,60 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn export_cert_chain_pem_writes_one_file_per_returned_cert() {
+        let dir =
+            std::env::temp_dir().join(format!("ssl-toolbox-export-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let result = ssl_toolbox_core::TlsCheckResult {
+            host: "example.com".to_string(),
+            port: 443,
+            cipher: ssl_toolbox_core::CipherInfo {
+                name: "TLS_AES_256_GCM_SHA384".to_string(),
+                bits: 256,
+                protocol: "TLSv1.3".to_string(),
+            },
+            cert_chain: Vec::new(),
+            cert_chain_pem: vec![
+                "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----\n".to_string(),
+                "-----BEGIN CERTIFICATE-----\nissuer\n-----END CERTIFICATE-----\n".to_string(),
+            ],
+            version_support: Vec::new(),
+            cipher_scan: Vec::new(),
+            validation: None,
+        };
+
+        let exported = export_cert_chain_pem(&result, &dir).expect("exported certs");
+
+        assert_eq!(exported.len(), 2);
+        assert_eq!(
+            exported[0].file_name().and_then(|name| name.to_str()),
+            Some("example.com-443-cert-01-leaf.pem")
+        );
+        assert_eq!(
+            exported[1].file_name().and_then(|name| name.to_str()),
+            Some("example.com-443-cert-02-chain.pem")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&exported[0]).expect("leaf file"),
+            result.cert_chain_pem[0]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&exported[1]).expect("chain file"),
+            result.cert_chain_pem[1]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn certificate_export_default_dir_sanitizes_hostnames() {
+        assert_eq!(
+            default_certificate_export_dir("[2001:db8::1]", 443),
+            "2001_db8__1-443-certs"
+        );
     }
 
     #[test]

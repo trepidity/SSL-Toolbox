@@ -4,7 +4,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::validation::validate_peer_cert;
-use crate::x509_utils::extract_chain_from_ssl;
+use crate::x509_utils::{collect_peer_chain, x509_to_cert_details, x509_to_pem_string};
 use crate::{CipherInfo, TlsCheckResult, TlsCipherScanResult, TlsVersionProbeResult};
 
 const TLS10_TLS11_CIPHERS: &[&str] = &[
@@ -184,7 +184,15 @@ pub fn connect_and_check(
     let ssl = ssl_stream.ssl();
     let cipher = current_cipher_info(ssl);
 
-    let cert_chain = extract_chain_from_ssl(ssl);
+    let peer_chain = collect_peer_chain(ssl);
+    let cert_chain = peer_chain
+        .iter()
+        .map(|cert| x509_to_cert_details(cert.as_ref()))
+        .collect();
+    let cert_chain_pem = peer_chain
+        .iter()
+        .map(|cert| x509_to_pem_string(cert.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
 
     let validation = if verify {
         Some(validate_peer_cert(ssl, host))
@@ -204,6 +212,7 @@ pub fn connect_and_check(
         port,
         cipher,
         cert_chain,
+        cert_chain_pem,
         version_support,
         cipher_scan,
         validation,

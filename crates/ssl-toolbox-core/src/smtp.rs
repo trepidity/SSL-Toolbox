@@ -5,7 +5,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use crate::validation::validate_peer_cert;
-use crate::x509_utils::extract_chain_from_ssl;
+use crate::x509_utils::{collect_peer_chain, x509_to_cert_details, x509_to_pem_string};
 use crate::{CipherInfo, TlsCheckResult};
 
 /// Read lines from the SMTP server until we get a line where the 4th char is a space
@@ -109,7 +109,15 @@ pub fn connect_and_check_smtp(host: &str, port: u16, verify: bool) -> Result<Tls
         }
     };
 
-    let cert_chain = extract_chain_from_ssl(ssl);
+    let peer_chain = collect_peer_chain(ssl);
+    let cert_chain = peer_chain
+        .iter()
+        .map(|cert| x509_to_cert_details(cert.as_ref()))
+        .collect();
+    let cert_chain_pem = peer_chain
+        .iter()
+        .map(|cert| x509_to_pem_string(cert.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
 
     let validation = if verify {
         Some(validate_peer_cert(ssl, host))
@@ -126,6 +134,7 @@ pub fn connect_and_check_smtp(host: &str, port: u16, verify: bool) -> Result<Tls
         port,
         cipher,
         cert_chain,
+        cert_chain_pem,
         version_support,
         cipher_scan: Vec::new(),
         validation,

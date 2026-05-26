@@ -550,6 +550,7 @@ mod tests {
                 sha1_fingerprint: "sha1".to_string(),
                 sha256_fingerprint: "sha256".to_string(),
             }],
+            cert_chain_pem: Vec::new(),
             version_support: vec![TlsVersionProbeResult {
                 label: "TLS 1.3".to_string(),
                 supported: true,

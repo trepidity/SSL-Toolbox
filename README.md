@@ -124,8 +124,8 @@ SCM_CLIENT_SECRET=<your client secret>
 | `view-cert --input FILE` | Display certificate details |
 | `view-csr --input FILE` | Display CSR details |
 | `view-pfx --input FILE` | Display PFX contents |
-| `verify-https --host HOST [--port PORT] [--no-verify] [--full-scan] [--out FILE]` | Check HTTPS endpoint |
-| `verify-ldaps --host HOST [--port PORT] [--no-verify] [--full-scan] [--ldap-config-test] [--ldap-port PORT] [--ldap-bind-dn DN] [--ldap-bind-password PASS] [--out FILE]` | Check LDAPS endpoint |
+| `verify-https --host HOST [--port PORT] [--no-verify] [--full-scan] [--out FILE] [--export-certs DIR]` | Check HTTPS endpoint |
+| `verify-ldaps --host HOST [--port PORT] [--no-verify] [--full-scan] [--ldap-config-test] [--ldap-port PORT] [--ldap-bind-dn DN] [--ldap-bind-password PASS] [--out FILE] [--export-certs DIR]` | Check LDAPS endpoint |
 | `verify-smtp --host HOST [--port PORT] [--no-verify] [--out FILE]` | Check SMTP STARTTLS endpoint |
 | `convert --input FILE --output FILE --format FORMAT` | Convert cert format (pem/der/base64) |
 | `identify --input FILE` | Auto-detect certificate format |

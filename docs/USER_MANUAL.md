@@ -351,6 +351,7 @@ ssl-toolbox verify-https --host example.com
 ssl-toolbox verify-https --host example.com --port 8443
 ssl-toolbox verify-https --host example.com --no-verify
 ssl-toolbox verify-https --host example.com --out verify-https.txt
+ssl-toolbox verify-https --host example.com --export-certs example-certs
 ```
 
 | Flag | Required | Description |
@@ -360,6 +361,7 @@ ssl-toolbox verify-https --host example.com --out verify-https.txt
 | `--no-verify` | No | Skip certificate validation (still shows cert details) |
 | `--full-scan` | No | Probe each protocol version against the locally testable cipher-suite set |
 | `--out`, `-o` | No | Save the verification report to a file |
+| `--export-certs DIR` | No | Save the returned certificate chain as one PEM file per certificate in `DIR` |
 
 **Output includes:**
 - Negotiated protocol version and cipher suite
@@ -367,6 +369,7 @@ ssl-toolbox verify-https --host example.com --out verify-https.txt
 - Optional full protocol/cipher-suite scan with `--full-scan` for HTTPS and LDAPS across the locally testable cipher set
 - Certificate validation: hostname match, expiry check, chain verification
 - Full certificate chain with SANs
+- Optional PEM export of the returned certificate chain, written in displayed chain order
 
 Connection timeout is 10 seconds for both TCP and TLS handshake.
 
@@ -385,6 +388,7 @@ ssl-toolbox verify-ldaps --host ldap.example.com --port 3269
 ssl-toolbox verify-ldaps --host ldap.example.com --ldap-config-test
 ssl-toolbox verify-ldaps --host ldap.example.com --ldap-config-test --ldap-bind-dn "cn=reader,dc=example,dc=com"
 ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
+ssl-toolbox verify-ldaps --host ldap.example.com --export-certs ldap-certs
 ```
 
 | Flag | Required | Description |
@@ -398,6 +402,7 @@ ssl-toolbox verify-ldaps --host ldap.example.com --out verify-ldaps.txt
 | `--ldap-bind-dn` | No | Bind DN for authenticated RootDSE search; omit for anonymous bind |
 | `--ldap-bind-password` | No | Password for `--ldap-bind-dn`; prompted if omitted |
 | `--out`, `-o` | No | Save the verification report to a file |
+| `--export-certs DIR` | No | Save the returned certificate chain as one PEM file per certificate in `DIR` |
 
 ### verify-smtp
 

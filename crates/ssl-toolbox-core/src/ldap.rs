@@ -402,7 +402,11 @@ mod tests {
             },
         );
 
-        assert!(request.windows(27).any(|item| item == b"cn=reader,dc=example,dc=com"));
+        assert!(
+            request
+                .windows(27)
+                .any(|item| item == b"cn=reader,dc=example,dc=com")
+        );
         assert!(request.windows(6).any(|item| item == b"secret"));
     }
 
