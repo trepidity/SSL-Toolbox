@@ -1,0 +1,29 @@
+title = "SSL-Toolbox gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ssl-toolbox-verify-artifact"
+description = "LDAPS/endpoint verify report artifact accidentally committed (see incident with cec33e4)"
+path = '''.*-verify\.txt$'''
+tags = ["artifact", "ssl-toolbox"]
+
+[[rules]]
+id = "ssl-toolbox-private-key-file"
+description = "Private key material should never be committed"
+path = '''.*\.(pem|key|pfx|p12)$'''
+tags = ["key", "ssl-toolbox"]
+
+[[rules]]
+id = "ssl-toolbox-pem-private-key"
+description = "PEM-encoded private key block in file contents"
+regex = '''-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED |PGP )?PRIVATE KEY-----'''
+tags = ["key", "ssl-toolbox"]
+
+[allowlist]
+description = "Paths/patterns that are known-safe"
+paths = [
+  '''target/''',
+  '''Cargo\.lock$''',
+]
