@@ -9,3 +9,6 @@ logs/
 data
 .env
 .ssl-toolbox/
+
+# LDAPS/endpoint verify output artifacts
+*-verify.txt
