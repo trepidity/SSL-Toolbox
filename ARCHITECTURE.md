@@ -249,7 +249,8 @@ Every verification populates a `TlsCheckResult` with:
 
 - `host`, `port`
 - `cipher: CipherInfo` — negotiated cipher's standard name (falling back to OpenSSL internal name), secret bits, and TLS version string
-- `cert_chain: Vec<CertDetails>` — leaf-first, deduplicated by DER
+- `cert_chain: Vec<CertDetails>` — leaf-first path order reconstructed from issuer relationships (signature verification, then OpenSSL name/key-identifier matching, then subject/issuer DN equality — not wire order), deduplicated by DER
+- `chain_sent_out_of_order: bool` — true when the server's presented certificate order differed from the reconstructed path (a misconfiguration that can break strict, non-path-building TLS clients); surfaced as a warning in display output
 - `cert_chain_pem: Vec<String>` — the same returned certificates encoded as PEM, used by `--export-certs`
 - `version_support: Vec<TlsVersionProbeResult>` — per-protocol handshake result for TLS 1.0, 1.1, 1.2, 1.3 (empty for SMTP; see 6.4)
 - `cipher_scan: Vec<TlsCipherScanResult>` — populated only when `--full-scan` is passed

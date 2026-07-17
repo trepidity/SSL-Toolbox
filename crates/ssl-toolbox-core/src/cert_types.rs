@@ -88,6 +88,11 @@ pub struct TlsCheckResult {
     pub version_support: Vec<TlsVersionProbeResult>,
     pub cipher_scan: Vec<TlsCipherScanResult>,
     pub validation: Option<CertValidation>,
+    /// True when the server's Certificate message order differed from the
+    /// reconstructed leaf-first path in `cert_chain` (a server misconfiguration
+    /// that can break strict, non-path-building TLS clients).
+    #[serde(default)]
+    pub chain_sent_out_of_order: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

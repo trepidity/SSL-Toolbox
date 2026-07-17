@@ -381,6 +381,15 @@ pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
             &result.cert_chain,
             "Certificate Chain",
         ));
+        if result.chain_sent_out_of_order {
+            writeln!(
+                &mut output,
+                "{}\n",
+                "  [!] Server sent its certificate chain out of path order; shown above reordered leaf → root. Strict TLS clients may reject this endpoint."
+                    .yellow()
+            )
+            .unwrap();
+        }
     }
 
     if let Some(validation) = &result.validation {
@@ -564,6 +573,7 @@ mod tests {
                 expiry_check: None,
                 chain_valid: None,
             }),
+            chain_sent_out_of_order: false,
         };
 
         let rendered = render_tls_check_result(&result, "HTTPS Endpoint Verification");
@@ -578,6 +588,46 @@ mod tests {
             rendered.find("Certificate Chain").unwrap()
                 < rendered.find("Certificate Validation").unwrap()
         );
+    }
+
+    #[test]
+    fn render_tls_check_result_warns_when_chain_sent_out_of_order() {
+        let mut result = TlsCheckResult {
+            host: "example.com".to_string(),
+            port: 443,
+            cipher: CipherInfo {
+                name: "TLS_AES_256_GCM_SHA384".to_string(),
+                bits: 256,
+                protocol: "TLSv1.3".to_string(),
+            },
+            cert_chain: vec![CertDetails {
+                common_name: "example.com".to_string(),
+                sans: Vec::new(),
+                not_before: "2026-01-01T00:00:00Z".to_string(),
+                not_after: "2027-01-01T00:00:00Z".to_string(),
+                issuer: "Example Issuer".to_string(),
+                signature_algorithm: "sha256WithRSAEncryption".to_string(),
+                public_key_bits: 2048,
+                serial_number: "01".to_string(),
+                sha1_fingerprint: "sha1".to_string(),
+                sha256_fingerprint: "sha256".to_string(),
+            }],
+            cert_chain_pem: Vec::new(),
+            version_support: Vec::new(),
+            cipher_scan: Vec::new(),
+            validation: None,
+            chain_sent_out_of_order: true,
+        };
+
+        let rendered = render_tls_check_result(&result, "HTTPS Endpoint Verification");
+        assert!(
+            rendered.contains("out of path order"),
+            "expected an out-of-order warning, got:\n{rendered}"
+        );
+
+        result.chain_sent_out_of_order = false;
+        let rendered = render_tls_check_result(&result, "HTTPS Endpoint Verification");
+        assert!(!rendered.contains("out of path order"));
     }
 
     #[test]

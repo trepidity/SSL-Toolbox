@@ -4403,6 +4403,7 @@ mod tests {
             version_support: Vec::new(),
             cipher_scan: Vec::new(),
             validation: None,
+            chain_sent_out_of_order: false,
         };
 
         let exported = export_cert_chain_pem(&result, &dir).expect("exported certs");

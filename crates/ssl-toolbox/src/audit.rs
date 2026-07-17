@@ -660,6 +660,7 @@ mod tests {
                     message: "chain verified".to_string(),
                 }),
             }),
+            chain_sent_out_of_order: false,
         }
     }
 

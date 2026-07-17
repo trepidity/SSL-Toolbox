@@ -4,6 +4,16 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.0.5 — 2026-07-16
+
+### fix: reconstruct TLS peer certificate chains in path order
+
+HTTPS, LDAPS, and SMTP verification no longer trust the wire order of the peer certificate stack. Chains are rebuilt leaf → intermediate → root using a three-tier issuer match: signature verification plus subject/issuer DN, then `X509_check_issued`, then DN equality alone. Same-name impostor CAs lose to the signature-verified issuer.
+
+When the server's presented order differs from the reconstructed path, `TlsCheckResult.chain_sent_out_of_order` is set and the report shows a warning. Display and `--export-certs` use the reordered path so exported PEMs are usable by strict clients.
+
+---
+
 ## v2.0.4 — 2026-05-26
 
 ### feat: export endpoint certificate chains
