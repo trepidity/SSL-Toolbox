@@ -4,6 +4,19 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## [Unreleased]
+
+### fix: desktop app could not be built from a clean checkout
+
+`tauri.conf.json` set `frontendDist` to `../ui/dist`, the path that is correct
+under the conventional `src-tauri/` layout. This crate keeps `tauri.conf.json`
+at its root alongside `ui/`, so the path resolved to `crates/ui/dist` and
+`cargo tauri build` failed with "Unable to find your web assets" after the Vite
+build had already succeeded. Neither CI workflow builds the GUI, so nothing
+caught it.
+
+---
+
 ## v2.1.0 — 2026-08-12
 
 ### feat: headless ops layer, Tauri GUI, and OpenSSL config editing
