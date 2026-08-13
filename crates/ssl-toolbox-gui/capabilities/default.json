@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The only capability the SSL Toolbox webview needs: the two file-dialog commands behind every Browse button. Custom commands declared in generate_handler! are not ACL-gated, so nothing else has to be granted here.",
+  "windows": ["main"],
+  "permissions": ["dialog:allow-open", "dialog:allow-save"]
+}

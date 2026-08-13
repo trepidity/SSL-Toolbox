@@ -29,7 +29,133 @@ pub struct PfxDetails {
     pub private_key: PrivateKeySummary,
 }
 
-#[derive(Debug, Clone)]
+/// A `GeneralName` choice from RFC 5280 §4.2.1.6, restricted to the seven that
+/// OpenSSL's `subjectAltName` config syntax can express.
+///
+/// `x400Address` [3] and `ediPartyName` [5] are deliberately absent: RFC 5280
+/// defines them, but `openssl.cnf` has no syntax for either, so a config file
+/// cannot carry them at all. Offering them would produce a config OpenSSL
+/// rejects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SanKind {
+    /// `dNSName` [2]
+    Dns,
+    /// `iPAddress` [7]
+    Ip,
+    /// `rfc822Name` [1]
+    Email,
+    /// `uniformResourceIdentifier` [6]
+    Uri,
+    /// `registeredID` [8]
+    RegisteredId,
+    /// `otherName` [0] — value is `OID;type:value`
+    OtherName,
+    /// `directoryName` [4] — in a config the value names a section holding a DN
+    DirName,
+}
+
+impl SanKind {
+    /// Every kind, in the order a user is most likely to want them.
+    pub const ALL: [SanKind; 7] = [
+        SanKind::Dns,
+        SanKind::Ip,
+        SanKind::Email,
+        SanKind::Uri,
+        SanKind::RegisteredId,
+        SanKind::OtherName,
+        SanKind::DirName,
+    ];
+
+    /// The key OpenSSL's `subjectAltName` section uses for this kind.
+    pub fn config_key(self) -> &'static str {
+        match self {
+            SanKind::Dns => "DNS",
+            SanKind::Ip => "IP",
+            SanKind::Email => "email",
+            SanKind::Uri => "URI",
+            SanKind::RegisteredId => "RID",
+            SanKind::OtherName => "otherName",
+            SanKind::DirName => "dirName",
+        }
+    }
+
+    /// Human label, used by both front-ends.
+    pub fn label(self) -> &'static str {
+        match self {
+            SanKind::Dns => "DNS",
+            SanKind::Ip => "IP address",
+            SanKind::Email => "Email",
+            SanKind::Uri => "URI",
+            SanKind::RegisteredId => "Registered ID",
+            SanKind::OtherName => "Other name",
+            SanKind::DirName => "Directory name",
+        }
+    }
+
+    /// Parse an `[alt_names]` key. Case-insensitive: OpenSSL's own docs mix
+    /// `email`/`Email` and real configs mix more than that.
+    pub fn from_config_key(key: &str) -> Option<Self> {
+        match key.to_ascii_lowercase().as_str() {
+            "dns" => Some(SanKind::Dns),
+            "ip" => Some(SanKind::Ip),
+            "email" => Some(SanKind::Email),
+            "uri" => Some(SanKind::Uri),
+            "rid" => Some(SanKind::RegisteredId),
+            "othername" => Some(SanKind::OtherName),
+            "dirname" => Some(SanKind::DirName),
+            _ => None,
+        }
+    }
+}
+
+/// One subject alternative name: a type and its value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SanName {
+    pub kind: SanKind,
+    pub value: String,
+}
+
+impl SanName {
+    pub fn new(kind: SanKind, value: impl Into<String>) -> Self {
+        Self {
+            kind,
+            value: value.into(),
+        }
+    }
+}
+
+/// What the toolbox is able to read out of an existing OpenSSL config.
+///
+/// This is deliberately *not* `ConfigInputs`. `ConfigInputs` is a complete
+/// description of a config this tool generates; a summary is a partial reading of
+/// a config someone else wrote, where every field may be absent and anything the
+/// toolbox does not model is reported rather than dropped. Nothing is ever
+/// rewritten from a summary — see `ARCHITECTURE.md` §4.5.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigSummary {
+    pub common_name: Option<String>,
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub locality: Option<String>,
+    pub organization: Option<String>,
+    pub org_unit: Option<String>,
+    pub email: Option<String>,
+    pub key_size: Option<u32>,
+    pub extended_key_usage: Option<String>,
+    /// Every SAN the config declares, in file order, each with its RFC 5280 type.
+    pub sans: Vec<SanName>,
+    /// Every section header found, in file order — including ones the toolbox
+    /// does not interpret, so the reader can see what is being preserved.
+    pub sections: Vec<String>,
+    /// Things worth a human's attention. Never fatal: a config the toolbox
+    /// cannot fully read is still a config it must let you edit and save.
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigInputs {
     pub common_name: String,
     pub country: String,
@@ -38,8 +164,8 @@ pub struct ConfigInputs {
     pub organization: String,
     pub org_unit: String,
     pub email: String,
-    pub san_dns: Vec<String>,
-    pub san_ips: Vec<String>,
+    /// Additional SANs. The common name is always emitted as `DNS.1` on top.
+    pub sans: Vec<SanName>,
     pub key_size: u32,
     pub extended_key_usage: String,
 }
@@ -109,7 +235,7 @@ pub struct LdapConfigCheckResult {
     pub attributes: Vec<LdapAttribute>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CertFormat {
     Pem,
     Der,

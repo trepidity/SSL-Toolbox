@@ -1,0 +1,18 @@
+[package]
+name = "ssl-toolbox-ops"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ssl-toolbox-core = { workspace = true }
+ssl-toolbox-ca = { workspace = true }
+ssl-toolbox-ca-sectigo = { workspace = true, optional = true }
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[features]
+default = []
+sectigo = ["dep:ssl-toolbox-ca-sectigo"]

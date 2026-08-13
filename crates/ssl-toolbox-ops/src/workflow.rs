@@ -14,6 +14,8 @@ pub enum ActionKind {
     CreateLegacyPfx,
     NewConfig,
     ConfigFromExisting,
+    ViewConfig,
+    EditConfig,
     ViewCert,
     ViewCsr,
     ViewPfx,
@@ -35,6 +37,8 @@ impl ActionKind {
             Self::CreateLegacyPfx => "legacy",
             Self::NewConfig => "new",
             Self::ConfigFromExisting => "config",
+            Self::ViewConfig => "vconf",
+            Self::EditConfig => "econf",
             Self::ViewCert => "cert",
             Self::ViewCsr => "csr",
             Self::ViewPfx => "vpfx",
@@ -56,6 +60,8 @@ impl ActionKind {
             Self::CreateLegacyPfx => "Create Legacy PFX",
             Self::NewConfig => "Generate New OpenSSL Config",
             Self::ConfigFromExisting => "Generate Config from Cert/CSR",
+            Self::ViewConfig => "View OpenSSL Config",
+            Self::EditConfig => "Edit OpenSSL Config",
             Self::ViewCert => "View Certificate Details",
             Self::ViewCsr => "View CSR Details",
             Self::ViewPfx => "View PFX Contents",
@@ -365,13 +371,13 @@ pub fn apply_job_to_workflow(memory: &mut WorkflowMemory, job: &JobRecord) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceFile {
     pub path: PathBuf,
     pub kind: ArtifactKind,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSnapshot {
     pub root: PathBuf,
     pub files: Vec<WorkspaceFile>,

@@ -1,6 +1,15 @@
 # ssl-toolbox
 
-A cross-platform CLI for SSL/TLS certificate management. Generate keys and CSRs, build PFX files, verify TLS endpoints, convert between certificate formats, and optionally submit to Sectigo Certificate Manager -- all from a single binary with no runtime dependencies.
+Cross-platform SSL/TLS certificate management. Generate keys and CSRs, build PFX files, verify TLS endpoints, convert between certificate formats, and optionally submit to Sectigo Certificate Manager.
+
+Ships as two front-ends over one shared engine:
+
+- **`ssl-toolbox`** — the CLI. A single statically-linked binary with no runtime dependencies; the right choice for servers, jump hosts, and scripting.
+- **SSL Toolbox** — the desktop app (Tauri). The same capabilities with a UI. Uses the host's system webview, so unlike the CLI it is **not** dependency-free — see [Installation](#installation).
+
+Both drive the same `ssl-toolbox-ops` engine, so neither can do something the other cannot.
+
+![SSL Toolbox desktop app](assets/ssl-toolbox-gui.jpg)
 
 ## Features
 
@@ -24,10 +33,10 @@ cargo build --release
 ./target/release/ssl-toolbox init
 # Edit .ssl-toolbox/config.json with your org info
 
-# Run the interactive menu
-./target/release/ssl-toolbox
+# Show the available commands
+./target/release/ssl-toolbox --help
 
-# Or use CLI commands directly
+# Run commands directly
 ./target/release/ssl-toolbox new-config --out server.cnf
 ./target/release/ssl-toolbox key --key server.key
 ./target/release/ssl-toolbox generate --conf server.cnf --key server.key --csr server.csr
@@ -35,7 +44,7 @@ cargo build --release
 
 ## Installation
 
-### Build from Source
+### CLI — build from source
 
 Requires Rust 1.85+ (edition 2024). OpenSSL is vendored -- no system OpenSSL needed.
 
@@ -51,7 +60,7 @@ Build without Sectigo CA support:
 cargo build --release -p ssl-toolbox --no-default-features
 ```
 
-### Pre-built Binaries
+### CLI — pre-built binaries
 
 Download binaries from [GitHub Releases](../../releases/latest). Each release includes archives for:
 
@@ -62,6 +71,26 @@ Download binaries from [GitHub Releases](../../releases/latest). Each release in
 - macOS Apple Silicon (`aarch64-apple-darwin`)
 
 A `sha256sums.txt` file is attached to every release for verification.
+
+### Desktop app — build from source
+
+Additionally requires Node.js 18+ and the Tauri CLI (`cargo install tauri-cli --version '^2'`).
+
+```bash
+cd crates/ssl-toolbox-gui
+npm --prefix ui install
+cargo tauri build     # or: cargo tauri dev
+```
+
+**Runtime dependencies.** The desktop app renders in the operating system's webview rather than bundling a browser engine. That keeps the download small but means it is not self-contained the way the CLI is:
+
+| Platform | Requirement |
+|---|---|
+| macOS | WKWebView — present on every supported macOS |
+| Windows | WebView2 runtime — preinstalled on Windows 11; the installer bootstraps it on Windows 10 |
+| Linux | `webkit2gtk-4.1` — must be installed from the distro's package manager |
+
+For servers, containers, jump hosts, and anywhere you cannot guarantee a webview, use the CLI.
 
 ## Configuration
 
@@ -108,12 +137,9 @@ SCM_CLIENT_SECRET=<your client secret>
 
 ## Command Reference
 
-<img width="912" height="455" alt="image" src="https://github.com/user-attachments/assets/4b304f9e-0e80-4c3b-9ab4-e91686816755" />
-
-
 | Command | Description |
 |---|---|
-| *(no args)* | Launch interactive menu |
+| *(no args)* | Print help; a subcommand is required |
 | `init [--global]` | Generate template config files |
 | `key --key FILE [--password PASS]` | Generate an encrypted RSA private key |
 | `generate --conf FILE --key FILE --csr FILE [--password PASS]` | Generate a CSR with an existing key, or create the key first if needed |
@@ -139,12 +165,14 @@ For detailed usage of every command, see [docs/USER_MANUAL.md](docs/USER_MANUAL.
 
 ## Architecture
 
-ssl-toolbox is a Cargo workspace of four crates:
+ssl-toolbox is a Cargo workspace of six crates. Two front-ends sit on one headless engine:
 
 ```
 ssl-toolbox (workspace)
   crates/
-    ssl-toolbox/            CLI binary: clap commands, interactive menu, display
+    ssl-toolbox/            CLI front-end: clap commands, terminal rendering
+    ssl-toolbox-gui/        Desktop front-end: Tauri v2 commands + React/TS UI
+    ssl-toolbox-ops/        Headless engine: OpRequest/OpOutcome, workflow memory, audit
     ssl-toolbox-core/       Library: key/CSR gen, PFX, TLS, SMTP, validation, convert, config
     ssl-toolbox-ca/         CA plugin trait (CaPlugin, CertProfile, SubmitOptions)
     ssl-toolbox-ca-sectigo/ Sectigo SCM implementation (feature-gated)

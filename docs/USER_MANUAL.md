@@ -12,6 +12,8 @@
   - [generate](#generate)
   - [new-config](#new-config)
   - [config](#config)
+  - [view-config](#view-config)
+  - [save-config](#save-config)
   - [pfx](#pfx)
   - [pfx-legacy](#pfx-legacy)
   - [view-cert](#view-cert)
@@ -88,13 +90,15 @@ cargo build --release -p ssl-toolbox --no-default-features
    }
    ```
 
-3. **Launch the interactive menu**:
+3. **See what the CLI can do**:
 
    ```bash
-   ssl-toolbox
+   ssl-toolbox --help
    ```
 
-   Or use CLI commands directly -- see [CLI Commands](#cli-commands) below.
+   A subcommand is required -- see [CLI Commands](#cli-commands) below. For a
+   graphical interface, use the SSL Toolbox desktop app instead; it exposes the
+   same operations.
 
 ### Configuration
 
@@ -250,6 +254,58 @@ ssl-toolbox config --input server.csr --out server.cnf --is-csr
 | `--is-csr` | No | Treat input as a CSR instead of a certificate |
 
 Extracts the subject distinguished name and SANs (DNS, IP, email, URI) from the input and writes a valid OpenSSL config file that can be used with `generate`.
+
+### view-config
+
+Print an existing OpenSSL config, followed by a summary of what the toolbox reads from it.
+
+```bash
+ssl-toolbox view-config --input request.cnf
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--input`, `-i` | Yes | Config file to read (`.cnf`, `.conf`, `.cfg`) |
+
+The file is printed byte-for-byte and never modified. The summary below it reports the common name, subject fields, key size, extended key usage, and the DNS/IP SANs, then lists **every** section found — including sections the toolbox does not interpret, so you can see what would be preserved by an edit.
+
+Warnings are advisory. The one worth acting on is a CN that is not also in the SAN list: current TLS clients match on SANs alone, so such a config produces a certificate that fails hostname verification for the very name you typed.
+
+The DN and SAN sections are located by following `distinguished_name` and `subjectAltName = @…`, so a config using non-standard section names is read correctly.
+
+Subject fields are recognised in either spelling — `CN` and `commonName`, `O` and `organizationName`, and so on — and an OpenSSL ordering prefix such as `0.organizationName` is understood, with multiple ordered values shown joined by commas.
+
+The full OpenSSL config grammar (`config(5)`) is understood, so what the panel reports is what OpenSSL sees:
+
+- Entries above the first `[section]` (the default section) are read, and are the fallback for unqualified variables.
+- `$var`, `${var}`, `$section::var`, `${section::var}` and `$ENV::VAR` are expanded. An undefined reference is left as written and flagged.
+- Double quotes preserve whitespace; single quotes are literal (the only way to write a literal `$`). A `#` inside quotes is data, not a comment.
+- `\` escapes the next character, and a trailing `\` continues the value on the next line.
+- `.include` is followed, relative to the file's own directory. An include that cannot be read is reported rather than silently skipped.
+- `.pragma` is recognised but not applied, and is reported so you know the reading may differ from OpenSSL's.
+
+All seven SAN types OpenSSL can express are read and shown with their type: `DNS`, `IP`, `email`, `URI`, `RID`, `otherName`, and `dirName` (whose section reference is resolved to the DN it holds). A key in the SAN section that is not a recognised type — `DSN.1` instead of `DNS.1`, say — contributes nothing to the certificate, so it is called out under warnings.
+
+### save-config
+
+Replace an existing OpenSSL config, keeping the previous contents alongside it.
+
+```bash
+# from a file
+ssl-toolbox save-config --out request.cnf --from edited.cnf
+
+# from stdin (the default)
+cat edited.cnf | ssl-toolbox save-config --out request.cnf
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--out`, `-o` | Yes | Config file to write |
+| `--from` | No | File to read the replacement text from; `-` (default) reads stdin |
+
+The text is written **verbatim** — comments, ordering, and any hand-tuned sections survive exactly as submitted. Nothing is regenerated or reformatted.
+
+Before writing, the previous contents are copied to `<out>.bak` and that path is reported. If the backup cannot be written, the save is abandoned and the original file is left untouched. Saving to a path that does not exist yet creates no `.bak`.
 
 ### pfx
 
@@ -498,7 +554,7 @@ ssl-toolbox ca submit --csr server.csr --out signed.crt --product-code 4491
 5. Downloads the signed certificate in PEM format
 6. Displays the certificate details and saves to the output path
 
-If `--product-code` is not set and `SECTIGO_PRODUCT_CODE` is not in the environment or config, the interactive menu will prompt you to select from available profiles.
+If `--product-code` is not set and `SECTIGO_PRODUCT_CODE` is not in the environment or config, the submission fails. Run `ssl-toolbox ca list-profiles` to see the available product codes, or pick one in the desktop app's CA screens.
 
 ### ca collect
 
@@ -538,7 +594,7 @@ Both directories are optional. If neither exists, all values default to empty st
 
 ### config.json Reference
 
-Controls default values for interactive CSR prompts (`new-config` command and interactive menu option 3).
+Controls default values for CSR subject fields -- the `new-config` command's prompts, and the pre-filled form in the desktop app's New config screen.
 
 ```json
 {

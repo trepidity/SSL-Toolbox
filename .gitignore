@@ -12,3 +12,9 @@ data
 
 # LDAPS/endpoint verify output artifacts
 *-verify.txt
+
+# Tauri GUI: dependencies and generated output
+crates/ssl-toolbox-gui/ui/node_modules/
+crates/ssl-toolbox-gui/ui/dist/
+# Written by tauri-build from capabilities/ at compile time
+crates/ssl-toolbox-gui/gen/schemas/

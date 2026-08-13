@@ -2,8 +2,8 @@ use std::fmt::Write as _;
 
 use crossterm::style::Stylize;
 use ssl_toolbox_core::{
-    CertDetails, CertValidation, LdapConfigCheckResult, PfxDetails, PrivateKeySummary,
-    TlsCheckResult,
+    CertDetails, CertValidation, ConfigSummary, LdapConfigCheckResult, PfxDetails,
+    PrivateKeySummary, TlsCheckResult,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -161,18 +161,6 @@ fn display_private_key_summary(summary: &PrivateKeySummary) {
     println!("└────────────────────────────────────────────────────────────────\n");
 }
 
-/// Display certificate chain details from raw certificate file content.
-pub fn display_cert_chain(cert_content: &[u8], title: &str) {
-    match ssl_toolbox_core::x509_utils::extract_cert_chain_details(cert_content) {
-        Ok(cert_chain) => {
-            display_cert_details_list(&cert_chain, title);
-        }
-        Err(e) => {
-            eprintln!("Error: Could not extract certificate details: {}", e);
-        }
-    }
-}
-
 /// Display a pre-parsed list of certificate details.
 pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
     print!("{}", render_cert_details_list(cert_chain, title));
@@ -281,11 +269,6 @@ pub fn display_pfx_details(details: &PfxDetails, title: &str) {
         }
         println!("└────────────────────────────────────────────────────────────────\n");
     }
-}
-
-/// Display TLS check results with connection, version support, and certificate chain.
-pub fn display_tls_check_result(result: &TlsCheckResult, label: &str) {
-    print!("{}", render_tls_check_result(result, label));
 }
 
 pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {
@@ -530,6 +513,68 @@ fn write_validation_line(output: &mut String, passed: bool, line: String) {
     } else {
         writeln!(output, "{}", line.red()).unwrap();
     }
+}
+
+/// Render what the toolbox could read out of an OpenSSL config.
+///
+/// Absent fields are shown as `—` rather than omitted: "this config does not set
+/// O" is information, and silently dropping the row hides it.
+pub fn render_config_summary(summary: &ConfigSummary, path: &str) -> String {
+    let mut out = String::new();
+    writeln!(&mut out, "\n┌─ Understood by this tool: {path}").ok();
+
+    let show = |label: &str, value: &Option<String>| -> String {
+        format!("│  {label:<22}{}", value.as_deref().unwrap_or("—"))
+    };
+    writeln!(&mut out, "{}", show("Common name", &summary.common_name)).ok();
+    writeln!(&mut out, "{}", show("Organization", &summary.organization)).ok();
+    writeln!(&mut out, "{}", show("Org unit", &summary.org_unit)).ok();
+    writeln!(&mut out, "{}", show("Country", &summary.country)).ok();
+    writeln!(&mut out, "{}", show("State", &summary.state)).ok();
+    writeln!(&mut out, "{}", show("Locality", &summary.locality)).ok();
+    writeln!(&mut out, "{}", show("Email", &summary.email)).ok();
+    writeln!(
+        &mut out,
+        "│  {:<22}{}",
+        "Key size",
+        summary
+            .key_size
+            .map(|bits| format!("{bits} bits"))
+            .unwrap_or_else(|| "—".to_string())
+    )
+    .ok();
+    writeln!(
+        &mut out,
+        "{}",
+        show("Extended key usage", &summary.extended_key_usage)
+    )
+    .ok();
+
+    if summary.sans.is_empty() {
+        writeln!(&mut out, "│  {:<22}none", "SANs").ok();
+    } else {
+        writeln!(&mut out, "│  {:<22}", "SANs").ok();
+        for san in &summary.sans {
+            writeln!(
+                &mut out,
+                "│    {:<10} {}",
+                san.kind.config_key(),
+                san.value
+            )
+            .ok();
+        }
+    }
+
+    if !summary.sections.is_empty() {
+        writeln!(&mut out, "│  {:<22}{}", "Sections", summary.sections.join(", ")).ok();
+    }
+
+    for warning in &summary.warnings {
+        writeln!(&mut out, "│  {} {}", "!".yellow(), warning).ok();
+    }
+
+    writeln!(&mut out, "└────────────────────────────────────────────────────────────────\n").ok();
+    out
 }
 
 #[cfg(test)]

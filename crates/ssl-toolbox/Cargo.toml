@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ssl-toolbox-core = { workspace = true }
+ssl-toolbox-ops = { workspace = true }
 ssl-toolbox-ca = { workspace = true }
 ssl-toolbox-ca-sectigo = { workspace = true, optional = true }
 
@@ -18,4 +19,4 @@ serde_json.workspace = true
 
 [features]
 default = ["sectigo"]
-sectigo = ["dep:ssl-toolbox-ca-sectigo"]
+sectigo = ["dep:ssl-toolbox-ca-sectigo", "ssl-toolbox-ops/sectigo"]

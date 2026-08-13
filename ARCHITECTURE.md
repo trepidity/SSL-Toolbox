@@ -33,13 +33,33 @@ The workspace is defined in [`Cargo.toml`](Cargo.toml) under `[workspace]`. All 
 
 Entry point: `crates/ssl-toolbox/src/main.rs`.
 
-- `clap` (derive) provides all subcommands. The top-level `Cli` has a global `--debug` flag and an optional subcommand; no subcommand launches the interactive menu.
-- `cliclack` drives the interactive workflow (menu, prompts, multiselect, spinners).
+A thin front-end over `ssl-toolbox-ops`. It parses arguments, collects passphrases, hands one `OpRequest` to the ops crate, and renders the structured result for a terminal. It performs no orchestration of its own.
+
+- `clap` (derive) provides all subcommands. A subcommand is **required**; a bare `ssl-toolbox` prints help.
+- `cliclack` is used only for secret entry and the `new-config` wizard — never for navigation. There is no interactive menu, dashboard, or command palette.
 - `dotenvy::dotenv()` is called at startup; missing `.env` is non-fatal.
 - `crossterm` is used by `display.rs` for terminal-width-aware rendering.
-- State persistence (`settings.rs`, `workflow.rs`) serialises to `~/.ssl-toolbox/state.json` with `0o600` / parent dir `0o700` on Unix.
 
-Depends on: `ssl-toolbox-core`, `ssl-toolbox-ca`, and `ssl-toolbox-ca-sectigo` (optional, via the `sectigo` feature).
+Depends on: `ssl-toolbox-ops`, `ssl-toolbox-core`, `ssl-toolbox-ca`, and `ssl-toolbox-ca-sectigo` (optional, via the `sectigo` feature).
+
+### 2.1a `ssl-toolbox-ops` (headless orchestration)
+
+Entry point: `crates/ssl-toolbox-ops/src/lib.rs`.
+
+Owns everything the toolbox does *between* the crypto primitives in `ssl-toolbox-core` and a user interface. It never prompts, never prints, and never touches a terminal. Every operation is expressed as one `OpRequest` in and one `OpResult` out, with results returned as structured, serde-serializable data.
+
+| Module | Responsibility |
+|---|---|
+| `ops` | `OpRequest`, `OpOutcome`, `OpResult`, `run` — the single executor every front-end drives, including CA submit/collect/profiles |
+| `secret` | `Secret` — passphrase wrapper: zeroizes on drop, refuses `Serialize`, redacts under `Debug` |
+| `endpoint` | `EndpointProtocol`, target parsing (`normalize_target`), certificate-chain PEM export |
+| `workflow` | `ActionKind`, `JobRecord`, `WorkspaceSnapshot`, profiles, previews, validation steps |
+| `settings` | `AppConfig`, `UiState`, `~/.ssl-toolbox/` persistence |
+| `audit` | Validation audit entries and run-over-run comparison |
+
+Depends on: `ssl-toolbox-core`, `ssl-toolbox-ca`, `anyhow`, `serde`, `serde_json`, `zeroize`. No `cliclack`, no `crossterm`, no terminal I/O of any kind — this is a compile-enforced boundary, not a convention.
+
+Adding a capability means adding an `OpRequest` variant, which both front-ends then expose. This is what makes the parity contract in §10.6 true by construction rather than by discipline.
 
 ### 2.2 `ssl-toolbox-core` (library)
 
@@ -47,7 +67,7 @@ Modules:
 
 | Module | Responsibility |
 |---|---|
-| `cert_types` | `CertDetails`, `PfxDetails`, `ConfigInputs`, `CertValidation`, `CipherInfo`, `TlsCheckResult`, `CertFormat`, `CsrDefaults` — all shared data shapes |
+| `cert_types` | `CertDetails`, `PfxDetails`, `ConfigInputs`, `ConfigSummary`, `SanKind`, `SanName`, `CertValidation`, `CipherInfo`, `TlsCheckResult`, `CertFormat`, `CsrDefaults` — all shared data shapes |
 | `key_csr` | `generate_key_and_csr`, `extract_csr_details` |
 | `pfx` | `create_pfx`, `create_pfx_legacy`, `create_pfx_legacy_3des`, `extract_pfx_details`, `extract_pfx_bundle_details` |
 | `tls` | `perform_tls_handshake`, `probe_tls_versions`, `connect_and_check` |
@@ -55,7 +75,7 @@ Modules:
 | `validation` | `validate_peer_cert` (hostname, expiry, chain) |
 | `x509_utils` | `x509_to_cert_details`, `extract_cert_chain_details`, `collect_peer_chain`, `extract_chain_from_ssl` |
 | `convert` | `detect_format`, `pem_to_der`, `der_to_pem`, `pem_to_base64`, `format_description` |
-| `config` | `generate_conf_from_inputs`, `generate_conf_from_cert_or_csr` |
+| `config` | `generate_conf_from_inputs`, `generate_conf_from_cert_or_csr`, `summarize_conf` |
 
 Depends on: `anyhow`, `openssl` (vendored), `serde`, `serde_json`. No awareness of any CA vendor. No reqwest, no tokio, no async.
 
@@ -77,28 +97,50 @@ Implements `CaPlugin` against the Sectigo Certificate Manager REST API. Depends 
 ### 2.5 Dependency rules
 
 ```
-ssl-toolbox ──▶ ssl-toolbox-core
-    │
-    ├──▶ ssl-toolbox-ca
-    │
-    └──(feature sectigo)──▶ ssl-toolbox-ca-sectigo ──▶ ssl-toolbox-ca
+ssl-toolbox (CLI) ──┐
+                    ├──▶ ssl-toolbox-ops ──▶ ssl-toolbox-core
+ssl-toolbox-gui ────┘         │
+     (Tauri)                  ├──▶ ssl-toolbox-ca
+                              │
+                              └──(feature sectigo)──▶ ssl-toolbox-ca-sectigo ──▶ ssl-toolbox-ca
 ```
 
 - `ssl-toolbox-core` must never depend on `ssl-toolbox-ca` or any vendor crate.
 - `ssl-toolbox-ca` must never depend on `ssl-toolbox-core` or any vendor crate.
 - Vendor plugin crates depend only on `ssl-toolbox-ca` (plus their HTTP/serde stack).
-- The CLI is the only crate that wires plugins into the trait.
+- `ssl-toolbox-ops` must never depend on a terminal or UI crate (`cliclack`, `crossterm`) or on any front-end crate.
+- Front-end crates must never call `ssl-toolbox-core` directly for anything that has an `OpRequest` variant. Bypassing `ops` is how the two front-ends drift apart.
+- `ssl-toolbox-ops` is the only crate that wires a CA plugin into the `CaPlugin` trait. Front-ends select the vendor feature; they never construct a plugin.
 
 ### 2.6 Feature gate matrix
 
 | Crate | `sectigo` on (default) | `sectigo` off |
 |---|---|---|
 | `ssl-toolbox` | Full CLI, `ca` subcommand wired to Sectigo | Full CLI, `ca` subcommand returns "No CA plugin compiled. Build with --features sectigo" |
+| `ssl-toolbox-gui` | Full GUI, CA screens reach Sectigo | Full GUI, CA screens surface the same "No CA plugin compiled" error |
+| `ssl-toolbox-ops` | `ca_plugin` constructs the Sectigo plugin | `ca_plugin` returns the "No CA plugin compiled" error |
 | `ssl-toolbox-core` | Always built | Always built |
 | `ssl-toolbox-ca` | Always built | Always built |
 | `ssl-toolbox-ca-sectigo` | Built | Not built, not linked, no `reqwest` compiled |
 
+Both front-ends re-export the flag onto `ssl-toolbox-ops`, so enabling `sectigo` on either one enables the same plugin in the same place.
+
 `cargo check -p ssl-toolbox --no-default-features` must pass on every commit that lands on `main`.
+
+### 2.7 Declared L0 test seams
+
+Tests are owed to **behaviors**, not to functions, and are written at the highest level that can express the behavior. These are the consumer seams a test may drive and the artifacts it may assert against. A test that reaches below these seams must name why.
+
+| Seam | Drive it by | Assert against |
+|---|---|---|
+| **Ops executor** | `ssl_toolbox_ops::run(OpRequest)` | The returned `OpOutcome` / `JobRecord`, and files written to disk |
+| **CLI** | Invoking the built binary with subcommand + args | Exit status, stdout/stderr text, files written |
+| **GUI command layer** | Invoking a `#[tauri::command]` handler directly | Its serialized return value |
+| **On-disk artifacts** | Any op that writes | `.key` / `.csr` / `.pfx` / `.cnf` / exported `.pem` — validated with the system `openssl` where available |
+| **Persisted state** | Ops that record | `~/.ssl-toolbox/state.json`, `validation-log.jsonl` |
+| **Committed fixtures** | Chain-order and parsing behavior | `samples/*.pem` golden files |
+
+**Known seam gap — network-dependent verification.** `OpRequest::VerifyEndpoint` reaches the network through `ssl-toolbox-core`'s `tls`/`smtp`/`ldap` modules, which construct their own sockets. There is no injectable transport, so verification logic — protocol-specific scan suppression, audit-entry construction, LDAP probe error containment — cannot be exercised at L0 without a live server. This is a design finding, not a licence to unit-test around it: closing it means introducing a transport seam in `ssl-toolbox-core`. Until then, that logic is covered only by manual verification against real endpoints.
 
 ---
 
@@ -160,14 +202,29 @@ Any key outside those prefixes is silently ignored. Subject OIDs that fail to re
 
 ### 4.3 SAN schema
 
-| Prefix in `.cnf` | X.509 SAN type |
-|---|---|
-| `DNS.N` or `DNS` | `dNSName` |
-| `IP.N` or `IP` | `iPAddress` (IPv4 or IPv6) |
-| `email.N` or `email` | `rfc822Name` |
-| `URI.N` or `URI` | `uniformResourceIdentifier` |
+SANs are modelled as `SanName { kind: SanKind, value: String }` — a type and a value, never a delimited string. `SanKind` covers the seven `GeneralName` choices from RFC 5280 §4.2.1.6 that OpenSSL's `subjectAltName` config syntax can express:
 
-When re-extracting SANs from a parsed cert/CSR (`extract_sans`, `extract_csr_details`, `extract_sans_into`), IPv4 and IPv6 SANs are both rendered via `std::net::IpAddr` formatting — no raw byte dumps.
+| `SanKind` | Key in `.cnf` | RFC 5280 `GeneralName` | Tag |
+|---|---|---|---|
+| `Dns` | `DNS.N` | `dNSName` | [2] |
+| `Ip` | `IP.N` | `iPAddress` (IPv4 or IPv6) | [7] |
+| `Email` | `email.N` | `rfc822Name` | [1] |
+| `Uri` | `URI.N` | `uniformResourceIdentifier` | [6] |
+| `RegisteredId` | `RID.N` | `registeredID` | [8] |
+| `OtherName` | `otherName.N` | `otherName` | [0] |
+| `DirName` | `dirName.N` | `directoryName` | [4] |
+
+**`x400Address` [3] and `ediPartyName` [5] are deliberately absent.** RFC 5280 defines them, but `openssl.cnf` has no syntax for either, so no config file can carry them. Offering them in a picker would produce a config OpenSSL rejects.
+
+Numbering is **per type**: `DNS.1, DNS.2, IP.1, email.1`. A single shared counter would emit `IP.2` as the first IP address.
+
+`dirName` is the one kind whose config value is a *section reference* rather than an inline string. The writer takes a DN (`CN=Example,O=Example Org`), emits `dirName.N = dirname_N`, and appends the `[ dirname_N ]` section — emitting the reference without defining the section yields a config OpenSSL refuses to load. The reader resolves the reference back to the DN it holds, and warns when the referenced section is missing.
+
+**Write-time validation.** `generate_conf_from_inputs` rejects, before writing anything, an `Ip` that does not parse as `IpAddr`, a `RegisteredId` that is not a dotted OID, and an `OtherName` lacking the `OID;type:value` form. Left to OpenSSL these surface at CSR time as errors that name no field.
+
+When re-extracting SANs from a parsed cert/CSR (`extract_sans`, `extract_csr_details`, `extract_sans_into`), IPv4 and IPv6 SANs are both rendered via `std::net::IpAddr` formatting — no raw byte dumps. **Extraction reaches only DNS/IP/email/URI**: the `openssl` crate's `GeneralName` exposes accessors for those four alone, so a cert carrying an `otherName` contributes nothing to a derived config. That is a binding limitation, not a modelling choice.
+
+**Comment syntax.** OpenSSL config comments start with `#` only. `;` is *not* a comment marker (that is Windows INI convention) and treating it as one truncates `otherName.N = OID;UTF8:value` at the OID.
 
 ### 4.4 `.cnf` round-trip contract
 
@@ -180,6 +237,48 @@ When re-extracting SANs from a parsed cert/CSR (`extract_sans`, `extract_csr_det
 The written file is *not* expected to be byte-identical to an input `.cnf`; it is a valid OpenSSL config that will regenerate a CSR with the same subject and SANs.
 
 `config::generate_conf_from_inputs(inputs, path)` writes a fully-featured `.cnf` with `default_md = sha256`, `prompt = no`, `basicConstraints = CA:FALSE`, `keyUsage = critical, digitalSignature, keyEncipherment`, an `extendedKeyUsage` driven by `ConfigInputs`, and a `subjectKeyIdentifier = hash`. The CN is always inserted as `DNS.1` in `[ alt_names ]` to prevent CN-only leaf certs.
+
+### 4.5 Viewing and editing an existing `.cnf`
+
+`OpRequest::LoadConfig` / `OpRequest::SaveConfig` (CLI: `view-config`, `save-config`; GUI: **Create → Edit config**) open a config someone else wrote.
+
+**The file text is the source of truth.** `LoadConfig` returns the file byte-for-byte and `SaveConfig` writes the submitted text byte-for-byte. Neither passes through `generate_conf_from_inputs`.
+
+This is a deliberate asymmetry with §4.4. `ConfigInputs` is a *complete* description of a config this tool generates; a real config additionally carries comments, `req_extensions` stanzas, custom OID sections, and hand-tuning that `ConfigInputs` cannot express. Round-tripping an existing file through the 11 fields of `ConfigInputs` would silently discard all of it, so the editor never regenerates — it edits.
+
+#### Configuration file grammar
+
+`summarize_conf` implements the OpenSSL configuration format as defined by OpenSSL's `config(5)`. **This format is not an RFC** — RFC 5280 governs certificate and SAN *semantics* (§4.3), while the file syntax is OpenSSL's own. The parser is a tokenizer, not a line splitter, because every construct below defeats splitting:
+
+| Construct | Behaviour |
+|---|---|
+| **Default section** | Entries above the first `[section]` belong to the unnamed default section, and are the fallback for unqualified `$name` lookups. Shown as `(default)`. |
+| **Comments** | `#` to end of line, **only outside quotes**. `;` is not a comment (that is Windows INI convention) and treating it as one truncates `otherName.N = OID;UTF8:value`. |
+| **Double quotes** | Preserve whitespace; escapes and `$` expansion still apply. |
+| **Single quotes** | Literal — no escapes, no expansion. The only way to write a literal `$`. |
+| **Escapes** | `\` escapes the next character; `\n`, `\r`, `\t`, `\b` are recognised. An escaped character is always significant, whitespace included. |
+| **Line continuation** | A trailing unescaped `\` joins the next physical line. `\\` at end of line does not. |
+| **Variable expansion** | `$name`, `${name}`, `$section::name`, `${section::name}`. Unbraced names are alphanumerics, `_`, and `::` — `.` terminates, or `$host.$domain` would read the name as `host.`. Expansion happens as the file is read, so only already-defined entries resolve, matching OpenSSL. An undefined reference is left literal and warned about. |
+| **`$ENV::name`** | Reads the process environment. Unset expands to empty, with a warning. |
+| **`.include`** | Followed, resolved relative to the directory of the file being read (nested includes resolve relative to their own file). Depth capped at 8 against include cycles. An unreadable include is warned about, never silent. |
+| **`.pragma`** | Consumed as a directive so it cannot appear as data, and reported — this reader does not apply pragmas, so one that changes parsing means the panel may differ from what OpenSSL sees. |
+
+Whitespace around a value is insignificant *unless* it came from inside quotes or from an escape.
+
+`config::summarize_conf(text, base_dir) -> ConfigSummary` is therefore a **read-only** reading of the text, used to describe the file, never to rewrite it. `base_dir` is where relative `.include` paths resolve from; `None` disables includes. Its contract:
+
+- Every field is `Option`, because someone else wrote the file and any field may be absent.
+- Section names are **followed, not assumed**: `[req] distinguished_name` and `subjectAltName = @…` may point at any section, and a config naming its DN section `[dn]` is valid OpenSSL. Conventional names (`req_distinguished_name`, `alt_names`) are the fallback only.
+- **DN attribute names are accepted in every spelling OpenSSL accepts.** Short and long forms are equivalent (`CN` / `commonName`, `O` / `organizationName`, `ST` / `stateOrProvinceName`, …), matched case-insensitively. Reading only the short form reports an empty subject for a config that fully specifies one — and `openssl req` itself writes the long form.
+- An **`N.` ordering prefix** (`0.organizationName`, `1.organizationName`) is syntax, not part of the attribute name. Both values belong to the subject, so both are reported, joined with `, `. A repeat of the *same* raw key is an override: last one wins.
+- Repeated keys resolve **last-wins**, matching OpenSSL.
+- Every SAN type in §4.3 is read into `ConfigSummary::sans` with its `SanKind`. A key in the SAN section that is *not* a recognised type — `DSN.1`, a plausible typo for `DNS.1` — contributes nothing to the certificate, so it is reported as a warning rather than dropped.
+- `sections` lists every section header in file order, including ones the tool does not interpret, so the operator can see what is being preserved rather than trusting that the panel shows everything.
+- It never fails. An unparseable config still returns a summary with warnings, because a file the tool cannot read is still a file it must let you open and fix.
+
+Warnings are advisory and never block a save: an unmodelled section is present; no CN; **CN absent from the SAN list** (current TLS clients match SANs only, so such a config yields a cert that fails hostname verification for the very name the operator typed); no SAN section.
+
+**Save safety.** `SaveConfig` copies the outgoing contents to `<path>.bak` *before* writing, and reports that path in `OpOutcome::ConfigSaved.backup`. Order matters: backing up after the write produces a `.bak` byte-identical to the new file — a backup that cannot restore anything. A failed backup aborts the save rather than proceeding. Saving a path that does not exist yet creates no `.bak`.
 
 ---
 
@@ -365,7 +464,7 @@ pub enum CollectFormat { PemCert, PemChain, Pkcs7 }
 2. Define a config struct (`Serialize + Deserialize + Default`) — mirror `SectigoConfig`'s shape.
 3. Define a plugin struct and implement `CaPlugin` for it. Keep `Send + Sync`.
 4. Provide a `configure_with_config(&Config, debug) -> Result<Box<dyn CaPlugin>>` constructor that reads any required secrets from environment variables (never from the JSON config).
-5. Add a feature flag `<vendor>` on the `ssl-toolbox` crate, gate the dependency behind `dep:ssl-toolbox-ca-<vendor>`, and wire `get_ca_plugin` behind `#[cfg(feature = "<vendor>")]`.
+5. Add a feature flag `<vendor>` on **`ssl-toolbox-ops`**, gate the dependency behind `dep:ssl-toolbox-ca-<vendor>`, and wire `ops::ca_plugin` behind `#[cfg(feature = "<vendor>")]`. Front-end crates re-export the flag (`sectigo = ["ssl-toolbox-ops/sectigo", …]`) but never construct a plugin themselves — wiring it in a front-end would give that front-end a CA the other one lacks.
 6. Update this document and `CHANGELOG.md`.
 
 ---
@@ -438,13 +537,15 @@ There is **no automatic retry**. Any non-2xx response returns an `anyhow::Error`
 
 ---
 
-## 10. Interactive Workflow & Persistent State
+## 10. Workflow Memory & Persistent State
 
-Implementation: `ssl-toolbox/src/workflow.rs`, `ssl-toolbox/src/settings.rs`, `ssl-toolbox/src/display.rs`, interactive handlers in `ssl-toolbox/src/main.rs`.
+Implementation: `ssl-toolbox-ops/src/workflow.rs`, `ssl-toolbox-ops/src/settings.rs`.
 
-### 10.1 Menu model
+> **Removed in 2.1:** the `cliclack` interactive menu, dashboard, and command palette. Navigation is now the GUI's job; the CLI is subcommand-only. The workflow model below survives because it is front-end agnostic — it records what the user has been working on so any front-end can pre-fill and suggest. The `PaletteEntry` search model is retained for the GUI's command palette.
 
-Running `ssl-toolbox` with no subcommand launches an interactive menu built on `cliclack`. Each menu entry is a `PaletteEntry` with:
+### 10.1 Palette model
+
+Each action is described by a `PaletteEntry` with:
 
 - `action` (integer used for routing)
 - `alias` (short string for command-palette search, e.g. `g`, `pfx`, `legacy`)
@@ -507,9 +608,14 @@ The list is capped at **20 most-recent entries** (`push_recent_job` inserts at i
 
 The scan is capped at **200 files**. The detected workflow is the family (by file stem) with the highest score, with a bonus for having both a cert and a key.
 
-### 10.6 CLI / menu parity
+### 10.6 Front-end parity
 
-Every CLI subcommand has a menu entry, and every menu entry invokes the same underlying `ssl-toolbox-core` function. The menu never unlocks capability the CLI lacks; the CLI never unlocks capability the menu lacks.
+Every capability is an `OpRequest` variant in `ssl-toolbox-ops`. Both the CLI and the GUI reach it through `ssl_toolbox_ops::run` and nothing else. Neither front-end may unlock capability the other lacks, and neither may call `ssl-toolbox-core` directly for anything an `OpRequest` variant covers.
+
+Front-ends differ only in two respects, both deliberate:
+
+- **Secret collection** — the CLI prompts on the terminal, the GUI collects in the webview. Both hand a `Secret` to ops.
+- **Rendering** — the CLI renders ANSI text via `display.rs`, the GUI renders React components. Ops returns structured data to both.
 
 ---
 

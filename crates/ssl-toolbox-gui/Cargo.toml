@@ -1,0 +1,30 @@
+[package]
+name = "ssl-toolbox-gui"
+version.workspace = true
+edition.workspace = true
+description = "Desktop UI for the SSL/TLS Security Toolbox"
+
+[lib]
+# Tauri's mobile targets require the app to be reachable as a library.
+name = "ssl_toolbox_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ssl-toolbox-ops = { workspace = true }
+ssl-toolbox-core = { workspace = true }
+ssl-toolbox-ca = { workspace = true }
+ssl-toolbox-ca-sectigo = { workspace = true, optional = true }
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[features]
+default = ["sectigo"]
+sectigo = ["dep:ssl-toolbox-ca-sectigo", "ssl-toolbox-ops/sectigo"]

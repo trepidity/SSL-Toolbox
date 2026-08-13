@@ -1,0 +1,797 @@
+/*
+ * SSL Toolbox design tokens.
+ *
+ * The tool is read more than it is driven: users stare at fingerprints, chains,
+ * and expiry dates and need to spot the one wrong character. So the visual
+ * system optimizes for scanning dense technical data — generous line-height on
+ * monospace values, a single saturated accent reserved for state (never
+ * decoration), and surfaces that step back so content carries the contrast.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg-base: #0d1117;
+  --bg-sunken: #090c11;
+  --bg-surface: #151b24;
+  --bg-raised: #1c2430;
+  --bg-input: #0f141b;
+
+  --border-subtle: #232c39;
+  --border-strong: #33404f;
+  --border-focus: #3d7dd8;
+
+  --text-primary: #e6edf3;
+  --text-secondary: #9aa8b8;
+  --text-muted: #6b7a8c;
+
+  --accent: #3d9be9;
+  --accent-hover: #58aef5;
+  --accent-dim: rgba(61, 155, 233, 0.14);
+
+  --ok: #3fb950;
+  --ok-dim: rgba(63, 185, 80, 0.13);
+  --warn: #d29922;
+  --warn-dim: rgba(210, 153, 34, 0.13);
+  --danger: #f85149;
+  --danger-dim: rgba(248, 81, 73, 0.13);
+
+  --radius: 7px;
+  --radius-sm: 5px;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ---------- App shell ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 216px 1fr;
+  height: 100%;
+}
+
+.rail {
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 14px 0;
+}
+
+.rail-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 4px 16px 16px;
+}
+
+.rail-brand strong {
+  font-size: 13px;
+  letter-spacing: 0.2px;
+}
+
+.rail-brand span {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.rail-group {
+  padding: 10px 10px 2px;
+}
+
+.rail-group-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  padding: 0 6px 6px;
+  text-transform: uppercase;
+}
+
+.rail-item {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: 13px;
+  gap: 9px;
+  padding: 6px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.rail-item:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.rail-item[aria-current="true"] {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.rail-item .glyph {
+  color: var(--text-muted);
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  width: 15px;
+}
+
+.rail-item[aria-current="true"] .glyph {
+  color: var(--accent);
+}
+
+/* ---------- Main area ---------- */
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.main-header {
+  align-items: baseline;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 12px;
+  flex: none;
+  padding: 16px 24px 13px;
+}
+
+.main-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.main-header p {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.main-body {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 0;
+  overflow: hidden;
+  padding: 20px 24px 24px;
+}
+
+.main-body.single {
+  grid-template-columns: 1fr;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* A scrolling pane must never shrink its children: flex items default to
+   flex-shrink: 1, so tall content gets squeezed to fit the pane instead of
+   overflowing it, `overflow-y: auto` never triggers, and `.panel`'s own
+   `overflow: hidden` clips the crushed result. */
+.pane > * {
+  flex: none;
+}
+
+@media (max-width: 760px) {
+  .main-body:not(.single) {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .main-body:not(.single) .pane {
+    overflow-y: visible;
+  }
+}
+
+/* ---------- Forms ---------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field > label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.field .hint {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select,
+textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+select {
+  font-family: var(--sans);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--border-focus);
+  outline: none;
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+.path-row {
+  display: flex;
+  gap: 6px;
+}
+
+.path-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-error {
+  color: var(--danger);
+}
+
+/* The config editor. Tall on purpose: a .cnf is read as a whole, and a
+   short window turns reviewing one into scrolling through a keyhole. */
+.code-editor {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  min-height: 320px;
+  padding: 10px 12px;
+  resize: vertical;
+  tab-size: 4;
+  white-space: pre;
+  width: 100%;
+}
+
+.code-editor:focus {
+  border-color: var(--border-focus);
+  outline: none;
+}
+
+/* A `fill` panel takes the pane's leftover height instead of leaving it blank.
+   `flex: 1 0 auto` grows but never shrinks — shrinking is what crushed panels
+   before (see the `.pane > *` note above), so only the grow factor is opened up. */
+.pane > .panel.fill {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane > .panel.fill > .panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+/* Inside a filling panel the editor stretches; elsewhere min-height governs. */
+.pane > .panel.fill .code-editor {
+  flex: 1 1 auto;
+}
+
+/* ---------- SAN rows ---------- */
+
+/* One row per name, type stated explicitly rather than inferred from which
+   free-text box it was typed into. */
+.san-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.san-row select {
+  flex: none;
+  width: 84px;
+}
+
+.san-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.san-row button {
+  /* Stretch so the control heights in a row match; a .ghost button is shorter
+     than a select by default, which reads as a misaligned row. */
+  align-self: stretch;
+  color: var(--text-muted);
+  flex: none;
+  line-height: 1;
+  padding: 6px 10px;
+}
+
+.san-row button:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.check {
+  align-items: center;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-size: 12.5px;
+  gap: 8px;
+}
+
+.check input {
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 14px;
+  width: 14px;
+}
+
+/* ---------- Buttons ---------- */
+
+button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 7px 12px;
+}
+
+button:hover:not(:disabled) {
+  background: var(--border-subtle);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04121f;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+button.ghost {
+  background: none;
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 6px 9px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+/* ---------- Panels & results ---------- */
+
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.panel-head {
+  align-items: center;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 9px;
+  justify-content: space-between;
+  padding: 8px 13px;
+}
+
+.panel-head h3 {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.panel-body {
+  padding: 13px;
+}
+
+.empty {
+  align-items: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  justify-content: center;
+  min-height: 190px;
+  padding: 26px;
+  text-align: center;
+}
+
+.empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.empty span {
+  font-size: 12px;
+  max-width: 320px;
+}
+
+/* Key/value rows for certificate detail */
+.kv {
+  display: grid;
+  gap: 3px 14px;
+  grid-template-columns: 132px 1fr;
+}
+
+.kv dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.kv dd {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.list li {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Badges & status ---------- */
+
+.badge {
+  border: 1px solid transparent;
+  border-radius: 20px;
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 2px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge.ok {
+  background: var(--ok-dim);
+  border-color: rgba(63, 185, 80, 0.35);
+  color: var(--ok);
+}
+
+.badge.warn {
+  background: var(--warn-dim);
+  border-color: rgba(210, 153, 34, 0.35);
+  color: var(--warn);
+}
+
+.badge.danger {
+  background: var(--danger-dim);
+  border-color: rgba(248, 81, 73, 0.35);
+  color: var(--danger);
+}
+
+.badge.neutral {
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.banner {
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  display: flex;
+  gap: 9px;
+  font-size: 12.5px;
+  margin-bottom: 14px;
+  padding: 10px 13px;
+}
+
+.banner.ok {
+  background: var(--ok-dim);
+  border-color: rgba(63, 185, 80, 0.3);
+}
+
+.banner.danger {
+  background: var(--danger-dim);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+.banner.warn {
+  background: var(--warn-dim);
+  border-color: rgba(210, 153, 34, 0.3);
+}
+
+.banner .banner-title {
+  font-weight: 600;
+}
+
+.banner code {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+/* Validation check rows */
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.check-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 9px;
+}
+
+.check-row .mark {
+  flex: none;
+  font-family: var(--mono);
+  font-weight: 700;
+  width: 14px;
+}
+
+.check-row.pass .mark {
+  color: var(--ok);
+}
+
+.check-row.fail .mark {
+  color: var(--danger);
+}
+
+.check-row .detail {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+/* Chain visualization */
+.chain {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.chain-node {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+/* The end-entity certificate is the one the operator came to look at; the CAs
+   above it are supporting context. The role chip carries that emphasis on its
+   own — the card itself stays visually identical to the CA cards. */
+.chain-node.is-leaf .chain-role {
+  background: var(--accent);
+  border-radius: 3px;
+  color: #06121d;
+  font-size: 10.5px;
+  letter-spacing: 0.6px;
+  padding: 2px 6px;
+}
+
+.chain-node.is-leaf .chain-cn {
+  color: var(--text-primary);
+  font-size: 14.5px;
+  font-weight: 600;
+  padding-top: 5px;
+}
+
+.chain-link {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 0 3px 15px;
+}
+
+.chain-role {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.chain-cn {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  padding: 2px 0;
+}
+
+.chain-meta {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+/* Protocol / cipher grid */
+.pill-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pill {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 4px 8px;
+}
+
+.pill.on {
+  background: var(--ok-dim);
+  border-color: rgba(63, 185, 80, 0.3);
+  color: var(--ok);
+}
+
+.pill.off {
+  color: var(--text-muted);
+}
+
+.pill.legacy {
+  background: var(--warn-dim);
+  border-color: rgba(210, 153, 34, 0.3);
+  color: var(--warn);
+}
+
+/* History table */
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 12px;
+  padding: 9px 13px;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.row .summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row .when {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.small {
+  font-size: 11.5px;
+}
+
+.spinner {
+  animation: spin 0.7s linear infinite;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  border-top-color: var(--accent);
+  display: inline-block;
+  height: 12px;
+  width: 12px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid var(--bg-base);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
