@@ -151,7 +151,11 @@ export function VerifyView({ protocol }: { protocol: EndpointProtocol }) {
             </>
           ) : null}
           <div className="actions">
-            <SubmitButton busy={op.busy} label="Verify endpoint" disabled={!host} />
+            <SubmitButton
+              busy={op.busy}
+              label="Verify endpoint"
+              disabled={!host || (exportCerts && !exportDir)}
+            />
           </div>
           {fullScan ? (
             <span className="hint">

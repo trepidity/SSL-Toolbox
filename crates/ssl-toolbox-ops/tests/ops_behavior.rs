@@ -149,7 +149,10 @@ fn an_existing_key_is_reused_rather_than_overwritten() {
 
     match result.outcome {
         OpOutcome::CsrGenerated { key_created, .. } => {
-            assert!(!key_created, "an existing key must not be reported as created")
+            assert!(
+                !key_created,
+                "an existing key must not be reported as created"
+            )
         }
         other => panic!("expected CsrGenerated, got {other:?}"),
     }

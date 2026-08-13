@@ -288,8 +288,9 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                 "Note: If your private key is encrypted, you'll be prompted for its password."
             );
             println!("If not encrypted, just press Enter when prompted.");
-            let key_password =
-                prompt_optional_password("Enter password for private key (or press Enter if not encrypted)")?;
+            let key_password = prompt_optional_password(
+                "Enter password for private key (or press Enter if not encrypted)",
+            )?;
             let pfx_password = prompt_new_password("Enter password for PFX export")?;
 
             report(ssl_toolbox_ops::run(OpRequest::CreatePfx {
@@ -344,7 +345,10 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                 std::fs::read_to_string(&from)
                     .with_context(|| format!("Could not read replacement config text {from}"))?
             };
-            report(ssl_toolbox_ops::run(OpRequest::SaveConfig { path: out, text })?);
+            report(ssl_toolbox_ops::run(OpRequest::SaveConfig {
+                path: out,
+                text,
+            })?);
         }
 
         Commands::NewConfig { out } => {
@@ -620,7 +624,11 @@ fn report(result: OpResult) {
         OpOutcome::ConfigWritten { path } => {
             println!("Success: OpenSSL config written to {path}")
         }
-        OpOutcome::ConfigLoaded { path, text, summary } => {
+        OpOutcome::ConfigLoaded {
+            path,
+            text,
+            summary,
+        } => {
             println!("{text}");
             print!("{}", display::render_config_summary(&summary, &path));
         }

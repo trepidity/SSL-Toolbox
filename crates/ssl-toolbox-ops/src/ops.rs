@@ -398,10 +398,7 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
 
             Ok(OpResult {
                 job: record.build(),
-                outcome: OpOutcome::PfxCreated {
-                    path: out,
-                    legacy,
-                },
+                outcome: OpOutcome::PfxCreated { path: out, legacy },
             })
         }
 
@@ -435,10 +432,8 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
         OpRequest::LoadConfig { path } => {
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("Could not read config {path}"))?;
-            let summary = ssl_toolbox_core::config::summarize_conf(
-                &text,
-                Path::new(&path).parent(),
-            );
+            let summary =
+                ssl_toolbox_core::config::summarize_conf(&text, Path::new(&path).parent());
             Ok(OpResult {
                 job: job(ActionKind::ViewConfig, format!("View config {path}"))
                     .input("config", &path)
@@ -467,10 +462,8 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
 
             std::fs::write(&path, &text)
                 .with_context(|| format!("Could not write config {path}"))?;
-            let summary = ssl_toolbox_core::config::summarize_conf(
-                &text,
-                Path::new(&path).parent(),
-            );
+            let summary =
+                ssl_toolbox_core::config::summarize_conf(&text, Path::new(&path).parent());
             Ok(OpResult {
                 job: job(ActionKind::EditConfig, format!("Edit config {path}"))
                     .output("config", &path)
@@ -496,10 +489,13 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
         OpRequest::GenerateConfigFromCertOrCsr { input, out, is_csr } => {
             ssl_toolbox_core::config::generate_conf_from_cert_or_csr(&input, &out, is_csr)?;
             Ok(OpResult {
-                job: job(ActionKind::ConfigFromExisting, format!("Config from {input}"))
-                    .input(if is_csr { "csr" } else { "cert" }, &input)
-                    .output("config", &out)
-                    .build(),
+                job: job(
+                    ActionKind::ConfigFromExisting,
+                    format!("Config from {input}"),
+                )
+                .input(if is_csr { "csr" } else { "cert" }, &input)
+                .output("config", &out)
+                .build(),
                 outcome: OpOutcome::ConfigWritten { path: out },
             })
         }
@@ -512,10 +508,7 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
                 job: job(ActionKind::ViewCert, format!("View cert {input}"))
                     .input("cert", &input)
                     .build(),
-                outcome: OpOutcome::CertInspected {
-                    path: input,
-                    chain,
-                },
+                outcome: OpOutcome::CertInspected { path: input, chain },
             })
         }
 
@@ -536,10 +529,8 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
         OpRequest::InspectPfx { input, password } => {
             let pfx_bytes =
                 std::fs::read(&input).with_context(|| format!("Failed to read PFX {input}"))?;
-            let details = ssl_toolbox_core::pfx::extract_pfx_bundle_details(
-                &pfx_bytes,
-                password.expose(),
-            )?;
+            let details =
+                ssl_toolbox_core::pfx::extract_pfx_bundle_details(&pfx_bytes, password.expose())?;
             Ok(OpResult {
                 job: job(ActionKind::ViewPfx, format!("View PFX {input}"))
                     .input("pfx", &input)
@@ -603,8 +594,11 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
             let plugin = ca_plugin(debug)?;
             let profiles = plugin.list_profiles(debug)?;
             Ok(OpResult {
-                job: job(ActionKind::CaProfiles, format!("List {} profiles", plugin.name()))
-                    .build(),
+                job: job(
+                    ActionKind::CaProfiles,
+                    format!("List {} profiles", plugin.name()),
+                )
+                .build(),
                 outcome: OpOutcome::CaProfilesListed {
                     provider: plugin.name().to_string(),
                     profiles,
@@ -621,8 +615,8 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
             debug,
         } => {
             let plugin = ca_plugin(debug)?;
-            let csr_pem =
-                std::fs::read_to_string(&csr).with_context(|| format!("Failed to read CSR {csr}"))?;
+            let csr_pem = std::fs::read_to_string(&csr)
+                .with_context(|| format!("Failed to read CSR {csr}"))?;
             let options = ssl_toolbox_ca::SubmitOptions {
                 description,
                 product_code,
@@ -668,11 +662,21 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
                 .with_context(|| format!("Failed to write certificate to {out}"))?;
 
             Ok(OpResult {
-                job: job(ActionKind::CaSubmit, format!("Collect certificate {request_id}"))
-                    .replay("request_id", &request_id)
-                    .replay("format", &normalized)
-                    .output(if normalized == "chain" { "chain" } else { "cert" }, &out)
-                    .build(),
+                job: job(
+                    ActionKind::CaSubmit,
+                    format!("Collect certificate {request_id}"),
+                )
+                .replay("request_id", &request_id)
+                .replay("format", &normalized)
+                .output(
+                    if normalized == "chain" {
+                        "chain"
+                    } else {
+                        "cert"
+                    },
+                    &out,
+                )
+                .build(),
                 outcome: OpOutcome::CaCertCollected {
                     path: out,
                     format: normalized,
@@ -727,7 +731,8 @@ fn verify_endpoint(
     ldap_config_test: Option<&LdapConfigTest>,
 ) -> Result<OpResult> {
     let default_port = protocol.default_port();
-    let (host, port) = endpoint::normalize_target(raw_host, port.unwrap_or(default_port), default_port)?;
+    let (host, port) =
+        endpoint::normalize_target(raw_host, port.unwrap_or(default_port), default_port)?;
 
     // STARTTLS cannot be probed with the direct-handshake cipher scan.
     let full_scan = full_scan && protocol.supports_full_scan();
@@ -739,7 +744,9 @@ fn verify_endpoint(
     };
 
     let check = match protocol {
-        EndpointProtocol::Smtp => ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify),
+        EndpointProtocol::Smtp => {
+            ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify)
+        }
         _ => ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan),
     };
 

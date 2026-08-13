@@ -30,7 +30,9 @@ pub fn summarize_conf(text: &str, base_dir: Option<&Path>) -> ConfigSummary {
         .and_then(|s| s.get("distinguished_name"))
         .unwrap_or("req_distinguished_name")
         .to_string();
-    let ext_name = req.and_then(|s| s.get("req_extensions")).map(str::to_string);
+    let ext_name = req
+        .and_then(|s| s.get("req_extensions"))
+        .map(str::to_string);
 
     if let Some(dn) = parsed.section(&dn_name) {
         summary.common_name = dn.dn_attribute(&["cn", "commonname"]);
@@ -47,9 +49,7 @@ pub fn summarize_conf(text: &str, base_dir: Option<&Path>) -> ConfigSummary {
         .and_then(|bits| bits.parse::<u32>().ok());
 
     // The SAN section is named by whichever extension section is in force.
-    let ext_section = ext_name
-        .as_deref()
-        .and_then(|name| parsed.section(name));
+    let ext_section = ext_name.as_deref().and_then(|name| parsed.section(name));
     if let Some(ext) = ext_section {
         summary.extended_key_usage = ext.get("extendedKeyUsage").map(str::to_string);
     }
@@ -88,7 +88,9 @@ pub fn summarize_conf(text: &str, base_dir: Option<&Path>) -> ConfigSummary {
                     match resolved {
                         Some(dn) => summary.sans.push(SanName::new(SanKind::DirName, dn)),
                         None => {
-                            summary.sans.push(SanName::new(SanKind::DirName, value.clone()));
+                            summary
+                                .sans
+                                .push(SanName::new(SanKind::DirName, value.clone()));
                             summary.warnings.push(format!(
                                 "{key} points at section [{value}], which this config does not \
                                  define — OpenSSL will reject it."
@@ -327,7 +329,9 @@ fn parse_into(text: &str, base_dir: Option<&Path>, depth: usize, out: &mut Parse
             continue;
         };
 
-        let name = unquote(&trimmed[..split], &current, out, false).trim().to_string();
+        let name = unquote(&trimmed[..split], &current, out, false)
+            .trim()
+            .to_string();
         let value = unquote(&trimmed[split + 1..], &current, out, true);
         if name.is_empty() {
             continue;
@@ -346,7 +350,12 @@ fn parse_into(text: &str, base_dir: Option<&Path>, depth: usize, out: &mut Parse
     }
 }
 
-fn handle_directive(directive: &str, base_dir: Option<&Path>, depth: usize, out: &mut ParsedConfig) {
+fn handle_directive(
+    directive: &str,
+    base_dir: Option<&Path>,
+    depth: usize,
+    out: &mut ParsedConfig,
+) {
     // `.include file` and `.include=file` are both accepted by OpenSSL.
     let (word, rest) = match directive.find([' ', '\t', '=']) {
         Some(at) => (&directive[..at], directive[at + 1..].trim()),
@@ -357,8 +366,7 @@ fn handle_directive(directive: &str, base_dir: Option<&Path>, depth: usize, out:
         "include" => {
             let target = rest.trim_matches('"').trim();
             if target.is_empty() {
-                out.warnings
-                    .push(".include with no file name.".to_string());
+                out.warnings.push(".include with no file name.".to_string());
                 return;
             }
             if depth >= MAX_INCLUDE_DEPTH {
@@ -449,12 +457,7 @@ fn find_unquoted(text: &str, needle: char) -> Option<usize> {
 
 /// Resolve one side of a `name = value` line: strip comments, apply quoting and
 /// escapes, and expand variables.
-fn unquote(
-    raw: &str,
-    current_section: &str,
-    out: &mut ParsedConfig,
-    expand_vars: bool,
-) -> String {
+fn unquote(raw: &str, current_section: &str, out: &mut ParsedConfig, expand_vars: bool) -> String {
     // Whitespace around the whole value is insignificant, so it is removed before
     // tokenizing — otherwise the space in `O = "Example"` before the quote would be
     // copied into the value, which quoting then protects from being trimmed away.
@@ -643,20 +646,8 @@ pub fn generate_conf_from_inputs(inputs: &ConfigInputs, output_path: &str) -> Re
                     format!("IP SAN {value:?} is not a valid IPv4 or IPv6 address")
                 })?;
             }
-            SanKind::RegisteredId
-                if !value.contains('.')
-                    || !value.chars().all(|c| c.is_ascii_digit() || c == '.') =>
-            {
-                anyhow::bail!(
-                    "Registered ID SAN {value:?} is not a dotted OID (for example 1.3.6.1.5.5.7.3.1)"
-                );
-            }
-            SanKind::OtherName if !value.contains(';') => {
-                anyhow::bail!(
-                    "otherName SAN {value:?} must be written as OID;type:value \
-                     (for example 1.3.6.1.4.1.311.20.2.3;UTF8:user@example.com)"
-                );
-            }
+            SanKind::RegisteredId => validate_dotted_oid(value, "Registered ID")?,
+            SanKind::OtherName => validate_other_name(value)?,
             _ => {}
         }
 
@@ -694,6 +685,58 @@ pub fn generate_conf_from_inputs(inputs: &ConfigInputs, output_path: &str) -> Re
     }
 
     fs::write(output_path, config).context("Failed to write config file")?;
+    Ok(())
+}
+
+/// Validate the numeric OID spelling OpenSSL accepts in SAN configuration.
+fn validate_dotted_oid(value: &str, label: &str) -> Result<()> {
+    let mut arcs = value.split('.');
+    let first = arcs.next().unwrap_or_default();
+    let second = arcs.next().unwrap_or_default();
+
+    if first.is_empty()
+        || second.is_empty()
+        || !first.chars().all(|ch| ch.is_ascii_digit())
+        || !second.chars().all(|ch| ch.is_ascii_digit())
+        || arcs
+            .clone()
+            .any(|arc| arc.is_empty() || !arc.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        anyhow::bail!("{label} SAN {value:?} is not a dotted OID (for example 1.3.6.1.5.5.7.3.1)");
+    }
+
+    match first {
+        "0" | "1" if second.parse::<u8>().is_ok_and(|arc| arc <= 39) => Ok(()),
+        "2" => Ok(()),
+        _ => anyhow::bail!(
+            "{label} SAN {value:?} is not a valid dotted OID (the first arc is 0, 1, or 2)"
+        ),
+    }
+}
+
+/// Validate the `OID;type:value` syntax OpenSSL expects for an `otherName`.
+fn validate_other_name(value: &str) -> Result<()> {
+    let Some((oid, typed_value)) = value.split_once(';') else {
+        anyhow::bail!(
+            "otherName SAN {value:?} must be written as OID;type:value \
+             (for example 1.3.6.1.4.1.311.20.2.3;UTF8:user@example.com)"
+        );
+    };
+    validate_dotted_oid(oid, "otherName").with_context(|| {
+        format!(
+            "otherName SAN {value:?} must begin with a valid dotted OID before its type and value"
+        )
+    })?;
+
+    let Some((value_type, contents)) = typed_value.split_once(':') else {
+        anyhow::bail!(
+            "otherName SAN {value:?} must be written as OID;type:value \
+             (for example 1.3.6.1.4.1.311.20.2.3;UTF8:user@example.com)"
+        );
+    };
+    if value_type.is_empty() || contents.is_empty() {
+        anyhow::bail!("otherName SAN {value:?} must have a non-empty type and value after its OID");
+    }
     Ok(())
 }
 

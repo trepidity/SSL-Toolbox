@@ -28,7 +28,9 @@ impl EndpointProtocol {
         match self {
             Self::Https => 443,
             Self::Ldaps => 636,
-            Self::Smtp => 25,
+            // Submission on 587 is the documented default for both front-ends.
+            // Port 25 remains available when an operator explicitly chooses it.
+            Self::Smtp => 587,
         }
     }
 
@@ -266,9 +268,8 @@ mod tests {
 
     #[test]
     fn normalize_target_uses_embedded_port_when_default_was_requested() {
-        let normalized =
-            normalize_target("ldaps://ldap.example.com:1636/ou=People", 636, 636)
-                .expect("normalized target");
+        let normalized = normalize_target("ldaps://ldap.example.com:1636/ou=People", 636, 636)
+            .expect("normalized target");
 
         assert_eq!(normalized, ("ldap.example.com".to_string(), 1636));
     }
@@ -279,6 +280,20 @@ mod tests {
             normalize_target("https://example.com:8443", 9443, 443).expect("normalized target");
 
         assert_eq!(normalized, ("example.com".to_string(), 9443));
+    }
+
+    #[test]
+    fn smtp_uses_submission_port_when_no_port_is_supplied() {
+        // SMTP submission is the product default documented by both front-ends.
+        // Reverting it to 25 would silently check a different service.
+        let normalized = normalize_target(
+            "smtp.example.com",
+            EndpointProtocol::Smtp.default_port(),
+            EndpointProtocol::Smtp.default_port(),
+        )
+        .expect("normalized target");
+
+        assert_eq!(normalized, ("smtp.example.com".to_string(), 587));
     }
 
     #[test]

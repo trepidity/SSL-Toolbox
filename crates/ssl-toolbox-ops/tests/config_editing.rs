@@ -27,13 +27,13 @@ default_bits       = 4096
 C  = US
 ST = Texas
 L  = Dallas
-O  = BSWH
-OU = IAM Systems
-CN = accessone.bswhealth.com
+O  = Example Organization
+OU = Platform Engineering
+CN = gateway.example.test
 
 [ alt_names ]
-DNS.1 = accessone.bswhealth.com
-DNS.2 = dallasaccess.bswhealth.com
+DNS.1 = gateway.example.test
+DNS.2 = api.gateway.example.test
 IP.1  = 10.20.30.40
 
 [v3_req]
@@ -73,17 +73,20 @@ fn loading_a_config_reports_the_fields_the_toolbox_understands() {
 
     match result.outcome {
         OpOutcome::ConfigLoaded { summary, .. } => {
-            assert_eq!(summary.common_name.as_deref(), Some("accessone.bswhealth.com"));
-            assert_eq!(summary.organization.as_deref(), Some("BSWH"));
-            assert_eq!(summary.org_unit.as_deref(), Some("IAM Systems"));
+            assert_eq!(summary.common_name.as_deref(), Some("gateway.example.test"));
+            assert_eq!(
+                summary.organization.as_deref(),
+                Some("Example Organization")
+            );
+            assert_eq!(summary.org_unit.as_deref(), Some("Platform Engineering"));
             assert_eq!(summary.country.as_deref(), Some("US"));
             assert_eq!(summary.key_size, Some(4096));
             assert_eq!(summary.extended_key_usage.as_deref(), Some("serverAuth"));
             assert_eq!(
                 summary.sans,
                 vec![
-                    SanName::new(SanKind::Dns, "accessone.bswhealth.com"),
-                    SanName::new(SanKind::Dns, "dallasaccess.bswhealth.com"),
+                    SanName::new(SanKind::Dns, "gateway.example.test"),
+                    SanName::new(SanKind::Dns, "api.gateway.example.test"),
                     SanName::new(SanKind::Ip, "10.20.30.40"),
                 ]
             );
@@ -190,10 +193,10 @@ prompt             = no
 countryName            = US
 stateOrProvinceName    = Texas
 localityName           = Dallas
-organizationName       = Baylor Scott & White Health
-organizationalUnitName = IAM Engineering
-commonName             = accessoneqa.bswhealth.com
-emailAddress           = IAMENGINEERING@BSWHealth.org
+organizationName       = Example Organization
+organizationalUnitName = Platform Engineering
+commonName             = qa.gateway.example.test
+emailAddress           = certificates@example.test
 
 [ v3_req ]
 basicConstraints     = CA:FALSE
@@ -203,7 +206,7 @@ subjectKeyIdentifier = hash
 subjectAltName       = @alt_names
 
 [ alt_names ]
-DNS.1 = accessoneqa.bswhealth.com
+DNS.1 = qa.gateway.example.test
 "#;
 
 #[test]
@@ -221,20 +224,17 @@ fn dn_attributes_are_read_whether_spelled_short_or_long() {
         OpOutcome::ConfigLoaded { summary, .. } => {
             assert_eq!(
                 summary.common_name.as_deref(),
-                Some("accessoneqa.bswhealth.com")
+                Some("qa.gateway.example.test")
             );
             assert_eq!(summary.country.as_deref(), Some("US"));
             assert_eq!(summary.state.as_deref(), Some("Texas"));
             assert_eq!(summary.locality.as_deref(), Some("Dallas"));
             assert_eq!(
                 summary.organization.as_deref(),
-                Some("Baylor Scott & White Health")
+                Some("Example Organization")
             );
-            assert_eq!(summary.org_unit.as_deref(), Some("IAM Engineering"));
-            assert_eq!(
-                summary.email.as_deref(),
-                Some("IAMENGINEERING@BSWHealth.org")
-            );
+            assert_eq!(summary.org_unit.as_deref(), Some("Platform Engineering"));
+            assert_eq!(summary.email.as_deref(), Some("certificates@example.test"));
             assert!(
                 summary.warnings.is_empty(),
                 "a fully specified config whose CN is in its SAN list warrants no \
@@ -255,8 +255,8 @@ fn dn_attributes_carrying_an_openssl_ordering_prefix_are_read() {
     let path = dir.write(
         "request.cnf",
         "[req_distinguished_name]\n\
-         0.organizationName = Baylor Scott & White Health\n\
-         1.organizationName = BSWH\n\
+         0.organizationName = Example Organization\n\
+         1.organizationName = Example Org\n\
          0.commonName       = prefixed.example.test\n",
     );
 
@@ -264,10 +264,13 @@ fn dn_attributes_carrying_an_openssl_ordering_prefix_are_read() {
 
     match result.outcome {
         OpOutcome::ConfigLoaded { summary, .. } => {
-            assert_eq!(summary.common_name.as_deref(), Some("prefixed.example.test"));
+            assert_eq!(
+                summary.common_name.as_deref(),
+                Some("prefixed.example.test")
+            );
             assert_eq!(
                 summary.organization.as_deref(),
-                Some("Baylor Scott & White Health, BSWH"),
+                Some("Example Organization, Example Org"),
                 "both ordered values belong to the subject"
             );
         }
@@ -437,10 +440,7 @@ fn an_ip_san_that_is_not_an_address_is_refused_before_anything_is_written() {
     let out = dir.path("bad.cnf");
 
     let error = run(OpRequest::GenerateConfig {
-        inputs: Box::new(base_inputs(vec![SanName::new(
-            SanKind::Ip,
-            "10.0.0.999",
-        )])),
+        inputs: Box::new(base_inputs(vec![SanName::new(SanKind::Ip, "10.0.0.999")])),
         out: out.clone(),
     })
     .expect_err("an invalid IP SAN must be refused");
@@ -454,6 +454,36 @@ fn an_ip_san_that_is_not_an_address_is_refused_before_anything_is_written() {
         !PathBuf::from(&out).exists(),
         "no config should be written when a SAN is rejected"
     );
+}
+
+#[test]
+fn malformed_oid_sans_are_refused_before_anything_is_written() {
+    // Invalid registered IDs and otherNames would otherwise produce a config
+    // that fails only later in OpenSSL, disconnected from the SAN entry the
+    // operator supplied.
+    for (kind, value) in [
+        (SanKind::RegisteredId, "1..3"),
+        (SanKind::OtherName, "not-an-oid;UTF8:value"),
+        (SanKind::OtherName, "1.3.6.1;UTF8"),
+    ] {
+        let dir = TestDir::new("write-bad-oid-san");
+        let out = dir.path("bad.cnf");
+
+        let error = run(OpRequest::GenerateConfig {
+            inputs: Box::new(base_inputs(vec![SanName::new(kind, value)])),
+            out: out.clone(),
+        })
+        .expect_err("a malformed OID SAN must be refused");
+
+        assert!(
+            error.to_string().contains(value),
+            "the error must name the offending value, got {error}"
+        );
+        assert!(
+            !PathBuf::from(&out).exists(),
+            "no config should be written when {value:?} is rejected"
+        );
+    }
 }
 
 fn base_inputs(sans: Vec<SanName>) -> ConfigInputs {

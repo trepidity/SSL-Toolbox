@@ -555,25 +555,29 @@ pub fn render_config_summary(summary: &ConfigSummary, path: &str) -> String {
     } else {
         writeln!(&mut out, "│  {:<22}", "SANs").ok();
         for san in &summary.sans {
-            writeln!(
-                &mut out,
-                "│    {:<10} {}",
-                san.kind.config_key(),
-                san.value
-            )
-            .ok();
+            writeln!(&mut out, "│    {:<10} {}", san.kind.config_key(), san.value).ok();
         }
     }
 
     if !summary.sections.is_empty() {
-        writeln!(&mut out, "│  {:<22}{}", "Sections", summary.sections.join(", ")).ok();
+        writeln!(
+            &mut out,
+            "│  {:<22}{}",
+            "Sections",
+            summary.sections.join(", ")
+        )
+        .ok();
     }
 
     for warning in &summary.warnings {
         writeln!(&mut out, "│  {} {}", "!".yellow(), warning).ok();
     }
 
-    writeln!(&mut out, "└────────────────────────────────────────────────────────────────\n").ok();
+    writeln!(
+        &mut out,
+        "└────────────────────────────────────────────────────────────────\n"
+    )
+    .ok();
     out
 }
 

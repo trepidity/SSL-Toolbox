@@ -134,13 +134,13 @@ fn a_trailing_backslash_continues_the_value_on_the_next_line() {
     let path = dir.write(
         "request.cnf",
         "[ req ]\ndistinguished_name = dn\n\n\
-         [ dn ]\nO = Baylor Scott \\\n& White Health\nCN = host.example.test\n",
+         [ dn ]\nO = Example \\\nOrganization\nCN = host.example.test\n",
     );
 
     let summary = summary_of(path);
     assert_eq!(
         summary.organization.as_deref(),
-        Some("Baylor Scott & White Health")
+        Some("Example Organization")
     );
 }
 
@@ -159,7 +159,10 @@ fn an_included_file_contributes_its_sections() {
     );
 
     let summary = summary_of(path);
-    assert_eq!(summary.common_name.as_deref(), Some("included.example.test"));
+    assert_eq!(
+        summary.common_name.as_deref(),
+        Some("included.example.test")
+    );
     assert_eq!(summary.organization.as_deref(), Some("Example Org"));
 }
 
