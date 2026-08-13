@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkcs12::Pkcs12;
-use openssl::pkey::{Id, PKey, PKeyRef, Private};
+use openssl::pkey::{Id, PKeyRef, Private};
 use openssl::stack::Stack;
 use openssl::x509::X509;
 use std::fs;
@@ -22,19 +22,11 @@ pub fn create_pfx(
     let key_pem = fs::read(key_file).context("Failed to read key file")?;
     let cert_pem = fs::read(cert_file).context("Failed to read cert file")?;
 
-    let pkey = match PKey::private_key_from_pem(&key_pem) {
-        Ok(key) => key,
-        Err(_) => {
-            if let Some(pass) = key_password {
-                PKey::private_key_from_pem_passphrase(&key_pem, pass.as_bytes())
-                    .context("Failed to parse private key (incorrect password)")?
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Private key is encrypted but no password was provided"
-                ));
-            }
-        }
-    };
+    let pkey = crate::key_csr::load_private_key_with_message(
+        &key_pem,
+        key_password,
+        "Private key is encrypted but no password was provided",
+    )?;
 
     let all_certs = X509::stack_from_pem(&cert_pem).context("Failed to parse certificate file")?;
 
@@ -207,19 +199,11 @@ pub fn create_pfx_legacy(
     let key_pem = fs::read(key_file).context("Failed to read key file")?;
     let cert_pem = fs::read(cert_file).context("Failed to read cert file")?;
 
-    let pkey = match PKey::private_key_from_pem(&key_pem) {
-        Ok(key) => key,
-        Err(_) => {
-            if let Some(pass) = key_password {
-                PKey::private_key_from_pem_passphrase(&key_pem, pass.as_bytes())
-                    .context("Failed to parse private key (incorrect password)")?
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Private key is encrypted but no password was provided"
-                ));
-            }
-        }
-    };
+    let pkey = crate::key_csr::load_private_key_with_message(
+        &key_pem,
+        key_password,
+        "Private key is encrypted but no password was provided",
+    )?;
 
     let all_certs = X509::stack_from_pem(&cert_pem).context("Failed to parse certificate file")?;
 

@@ -136,17 +136,35 @@ fn load_private_key(
     key_pem: &[u8],
     key_password: Option<&str>,
 ) -> Result<PKey<openssl::pkey::Private>> {
-    if let Ok(key) = PKey::private_key_from_pem(key_pem) {
+    load_private_key_with_message(
+        key_pem,
+        key_password,
+        "Private key is encrypted or unreadable; a password is required to generate the CSR",
+    )
+}
+
+/// Load a PEM private key, encrypted or not, without ever prompting.
+///
+/// `PKey::private_key_from_pem` installs OpenSSL's *default* passphrase
+/// callback, which prompts on the terminal and reads stdin. Reaching that is a
+/// bug in every context this library runs in: it silently drains piped stdin
+/// for CLI callers, and a GUI has no terminal to answer it. Supplying an
+/// explicit zero-length callback keeps the "try unencrypted first" behavior
+/// while guaranteeing the prompt is never reached — the callback is not invoked
+/// at all for an unencrypted key, and returns an empty passphrase (failing
+/// cleanly) for an encrypted one.
+pub(crate) fn load_private_key_with_message(
+    key_pem: &[u8],
+    key_password: Option<&str>,
+    missing_password_message: &'static str,
+) -> Result<PKey<openssl::pkey::Private>> {
+    if let Ok(key) = PKey::private_key_from_pem_callback(key_pem, |_| Ok(0)) {
         return Ok(key);
     }
 
     let password = key_password
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "Private key is encrypted or unreadable; a password is required to generate the CSR"
-            )
-        })?;
+        .ok_or_else(|| anyhow!(missing_password_message))?;
 
     PKey::private_key_from_pem_passphrase(key_pem, password.as_bytes())
         .context("Failed to decrypt private key")
