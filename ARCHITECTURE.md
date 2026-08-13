@@ -8,13 +8,15 @@ Authoritative reference for the design, cryptographic contracts, and operational
 
 ## 1. Core Concepts
 
-ssl-toolbox is a single-binary, cross-platform CLI for SSL/TLS certificate operations. It generates RSA keys and CSRs, builds and inspects PKCS#12 containers, verifies TLS endpoints over HTTPS/LDAPS/SMTP-STARTTLS, converts between certificate encodings, and optionally submits CSRs to a pluggable Certificate Authority backend.
+ssl-toolbox is a cross-platform toolkit for SSL/TLS certificate operations, delivered as a single-binary CLI and a desktop GUI over one shared engine. It generates RSA keys and CSRs, builds and inspects PKCS#12 containers, verifies TLS endpoints over HTTPS/LDAPS/SMTP-STARTTLS, converts between certificate encodings, and optionally submits CSRs to a pluggable Certificate Authority backend.
 
 The workspace is structured around a hard separation of concerns:
 
 | Concern | Crate | Role |
 |---|---|---|
-| User interface | `ssl-toolbox` | clap commands, interactive cliclack menu, display formatting, persistent workspace state |
+| Command-line interface | `ssl-toolbox` | clap subcommands, passphrase entry, terminal rendering |
+| Desktop interface | `ssl-toolbox-gui` | Tauri v2 + React front-end |
+| Headless orchestration | `ssl-toolbox-ops` | `OpRequest` / `OpResult` executor, workflow memory, settings, audit — the single engine both front-ends drive |
 | Cryptographic primitives | `ssl-toolbox-core` | RSA/CSR generation, PFX build/inspect, TLS probing, format conversion, CSR config contracts |
 | CA abstraction | `ssl-toolbox-ca` | `CaPlugin` trait, `CertProfile`, `SubmitOptions`, `CollectFormat` |
 | Reference CA impl | `ssl-toolbox-ca-sectigo` | Sectigo Certificate Manager plugin, feature-gated |
@@ -27,7 +29,7 @@ All cryptography runs against a **vendored OpenSSL 0.10** (the `openssl` crate w
 
 ## 2. Workspace & Crate Boundaries
 
-The workspace is defined in [`Cargo.toml`](Cargo.toml) under `[workspace]`. All four member crates share `version = "2.0.1"` and `edition = "2024"` via `[workspace.package]`. Shared dependencies are declared once in `[workspace.dependencies]`.
+The workspace is defined in [`Cargo.toml`](Cargo.toml) under `[workspace]`. All six member crates share one `version` and `edition = "2024"` via `[workspace.package]`. Shared dependencies are declared once in `[workspace.dependencies]`.
 
 ### 2.1 `ssl-toolbox` (CLI binary)
 
@@ -568,7 +570,7 @@ struct UiState {
 }
 ```
 
-`WorkflowMemory` holds the currently-active artifacts (config, key, csr, cert, chain, pfx, legacy_pfx) and endpoint hosts (https_host, ldaps_host, smtp_host) along with the **active profile**. The interactive menu pre-fills prompts from `WorkflowMemory` and from the last-used value in `recent_paths`.
+`WorkflowMemory` holds the currently-active artifacts (config, key, csr, cert, chain, pfx, legacy_pfx) and endpoint hosts (https_host, ldaps_host, smtp_host) along with the **active profile**. Both front-ends pre-fill from `WorkflowMemory` and from the last-used value in `recent_paths`.
 
 ### 10.3 Active profile
 
@@ -669,8 +671,8 @@ ssl-toolbox bundles a statically-linked OpenSSL via the `openssl` crate's `vendo
 2. **Feature-gate all CA dependencies.** A `--no-default-features` build must produce a working binary with no vendor plugin code linked in.
 3. **Never print secrets.** Tokens, passwords, client IDs, and client secrets are never emitted to stdout, stderr, logs, or error messages — regardless of `--debug`.
 4. **Vendored OpenSSL.** No system OpenSSL dependency. The binary is reproducible across Linux, macOS, and Windows without platform crypto libraries.
-5. **Single binary, no runtime deps.** One executable. No JRE, no Python, no shared libraries beyond libc/kernel32.
-6. **CLI and interactive menu reach feature parity.** Every subcommand has a menu entry; every menu entry exists as a subcommand.
+5. **The CLI is a single binary with no runtime deps.** One executable. No JRE, no Python, no shared libraries beyond libc/kernel32. The desktop app additionally requires a platform webview (see README).
+6. **Both front-ends reach feature parity by construction.** A capability is an `OpRequest` variant, which the CLI and the GUI each expose; neither may call `ssl-toolbox-core` directly for anything that has a variant (§10.6).
 7. **Config layering is strict: CLI > env > project > user > defaults.** No other precedence exists. Later layers override earlier layers non-transitively (only non-empty fields overlay).
 8. **Test against the spec, not the implementation.** If a test fails, either the spec is wrong or the code is wrong — never silently relax the test to match the code.
 9. **No CA awareness in the core library.** `ssl-toolbox-core` must compile without `ssl-toolbox-ca` in its dependency graph.
@@ -682,7 +684,11 @@ ssl-toolbox bundles a statically-linked OpenSSL via the `openssl` crate's `vendo
 
 Every tradeoff listed below is deliberate. Contributors changing any of these must update this section in the same PR.
 
-### Vendored OpenSSL blocks FIPS mode
+### Releases ship the CLI only
+
+`.github/workflows/release.yml` builds the five CLI targets and attaches `sha256sums.txt`. It produces **no desktop bundles** — the GUI is buildable from source (see README) but not released.
+
+**Accepted because:** shipping the desktop app means macOS signing and notarisation plus a Windows installer that bootstraps WebView2, each with its own signing identity and secret handling. That is a release-engineering workstream, not a build flag, and the CLI is what runs on the servers and jump hosts most operators reach for. Closing this means adding `tauri build` jobs per platform and the signing material to go with them.
 
 The `vendored` feature compiles OpenSSL from source without the FIPS provider. Users who need FIPS 140-2/140-3 validation cannot use ssl-toolbox for those workflows.
 
@@ -730,7 +736,7 @@ Even though OpenSSL is vendored, `validate_chain` calls `X509StoreBuilder::set_d
 
 When `options.term_days` is `None`, the plugin picks `*profile.terms.iter().max()`. A CA that lists `[90, 365, 730]` will default to 730 days.
 
-**Accepted because:** for the overwhelming majority of ssl-toolbox users, "longest available" is what they want — fewer renewals. Users with a specific term requirement pass `--term` (future flag; currently set via `SubmitOptions` from the interactive menu). Short-dated certs are still reachable through the API; only the default changes.
+**Accepted because:** for the overwhelming majority of ssl-toolbox users, "longest available" is what they want — fewer renewals. Users with a specific term requirement pass `--term` (future flag; currently set via `SubmitOptions`). Short-dated certs are still reachable through the API; only the default changes.
 
 ---
 

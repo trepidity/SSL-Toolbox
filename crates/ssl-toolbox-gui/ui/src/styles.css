@@ -680,11 +680,6 @@ button.ghost {
   padding: 2px 0;
 }
 
-.chain-meta {
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-
 /* Protocol / cipher grid */
 .pill-grid {
   display: flex;
