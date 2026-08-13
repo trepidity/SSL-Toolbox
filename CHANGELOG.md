@@ -4,6 +4,30 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.1.0 — 2026-08-12
+
+### feat: headless ops layer, Tauri GUI, and OpenSSL config editing
+
+The cliclack TUI is replaced by a desktop front-end, and both front-ends now run on one shared engine. The new `ssl-toolbox-ops` crate takes one `OpRequest` and returns one `OpResult`; it never prompts, prints, or touches a terminal, so CLI/GUI parity holds by construction rather than by convention. `audit`, `settings`, and `workflow` moved there from the CLI, and `main.rs` shrank from ~4,500 to ~1,100 lines — a bare `ssl-toolbox` now prints help.
+
+The new `ssl-toolbox-gui` crate is Tauri v2 + React + TypeScript. Secrets live only in component-local state and are cleared in a `finally` on every submit; devtools are compiled into debug builds only, so a release binary cannot inspect a webview that has held a passphrase.
+
+### feat: view and edit OpenSSL configs
+
+New `LoadConfig` / `SaveConfig` ops, exposed as `view-config` / `save-config` on the CLI and Create → Edit config in the GUI. The file text is the source of truth: loads return it byte-for-byte, saves write it byte-for-byte, and neither routes through the generator — regenerating from a parse would silently destroy comments, `req_extensions`, and custom OID sections. Saves copy the previous contents to `<path>.bak` before writing.
+
+The config reader implements the real `config(5)` grammar: a default section above the first `[section]`; `$var` / `${var}` / `$sec::var` / `${sec::var}` / `$ENV::var` expansion; double quotes preserving whitespace and single quotes literal; `#` comments only outside quotes; backslash escapes and line continuation; `.include` resolved against the file's own directory with a depth cap; `.pragma` consumed and reported as unapplied. DN attributes are read in either spelling (`CN` / `commonName`) and with OpenSSL's `N.` ordering prefix.
+
+### feat: typed RFC 5280 SAN model
+
+SANs are now `SanName { kind, value }` instead of delimited strings, covering the seven `GeneralName` choices OpenSSL config syntax can express. Numbering is per type, `dirName` emits the section it references, and write-time validation rejects a malformed IP, RID, or `otherName` before anything is written. The GUI enters SANs as one row per name with an explicit type.
+
+### fix: load private keys without prompting or draining stdin
+
+`PKey::private_key_from_pem` installs OpenSSL's default passphrase callback, which prompts on the terminal and consumes stdin — verified empirically. Three call sites reached it (`key_csr::generate_csr` and two in `pfx`). All now use a non-prompting helper with an explicit zero-length callback, preserving the "try unencrypted first" behavior while failing cleanly on an encrypted key.
+
+---
+
 ## v2.0.5 — 2026-07-16
 
 ### fix: reconstruct TLS peer certificate chains in path order

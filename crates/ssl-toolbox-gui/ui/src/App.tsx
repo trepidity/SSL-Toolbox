@@ -230,7 +230,7 @@ export default function App() {
       <nav className="rail">
         <div className="rail-brand">
           <strong>SSL Toolbox</strong>
-          <span>v2.0.5</span>
+          <span>v2.1.0</span>
         </div>
         {NAV.map((group) => (
           <div className="rail-group" key={group.label}>
