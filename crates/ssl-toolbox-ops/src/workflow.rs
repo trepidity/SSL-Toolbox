@@ -22,6 +22,7 @@ pub enum ActionKind {
     VerifyHttps,
     VerifyLdaps,
     VerifySmtp,
+    VerifySqlServer,
     Convert,
     Identify,
     CaSubmit,
@@ -45,6 +46,7 @@ impl ActionKind {
             Self::VerifyHttps => "https",
             Self::VerifyLdaps => "ldaps",
             Self::VerifySmtp => "smtp",
+            Self::VerifySqlServer => "sql-server",
             Self::Convert => "convert",
             Self::Identify => "id",
             Self::CaSubmit => "submit",
@@ -68,6 +70,7 @@ impl ActionKind {
             Self::VerifyHttps => "Verify HTTPS Endpoint",
             Self::VerifyLdaps => "Verify LDAPS Endpoint",
             Self::VerifySmtp => "Verify SMTP Endpoint",
+            Self::VerifySqlServer => "Verify SQL Server Endpoint",
             Self::Convert => "Convert Certificate Format",
             Self::Identify => "Identify Certificate Format",
             Self::CaSubmit => "CA: Submit CSR",
@@ -254,6 +257,7 @@ pub struct WorkflowMemory {
     pub https_host: Option<String>,
     pub ldaps_host: Option<String>,
     pub smtp_host: Option<String>,
+    pub sql_server_host: Option<String>,
 }
 
 impl WorkflowMemory {
@@ -363,6 +367,7 @@ pub fn apply_job_to_workflow(memory: &mut WorkflowMemory, job: &JobRecord) {
             "https_host" => memory.https_host = Some(value.clone()),
             "ldaps_host" => memory.ldaps_host = Some(value.clone()),
             "smtp_host" => memory.smtp_host = Some(value.clone()),
+            "sql_server_host" => memory.sql_server_host = Some(value.clone()),
             _ => {}
         }
     }
@@ -791,7 +796,10 @@ pub fn next_steps(job: &JobRecord, memory: &WorkflowMemory) -> Vec<String> {
             "Generate a key and CSR from the config.".to_string(),
             "Open the config to confirm SAN and EKU settings.".to_string(),
         ],
-        ActionKind::VerifyHttps | ActionKind::VerifyLdaps | ActionKind::VerifySmtp => vec![
+        ActionKind::VerifyHttps
+        | ActionKind::VerifyLdaps
+        | ActionKind::VerifySmtp
+        | ActionKind::VerifySqlServer => vec![
             "Repeat the check with validation disabled if you need to inspect an untrusted chain."
                 .to_string(),
             "Inspect the peer certificate file if you need a local artifact.".to_string(),

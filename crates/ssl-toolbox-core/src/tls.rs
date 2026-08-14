@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use openssl::ssl::{SslCipherRef, SslConnector, SslMethod, SslRef, SslVerifyMode, SslVersion};
+use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -181,6 +182,26 @@ pub fn connect_and_check(
     let ssl_stream = perform_tls_handshake(host, port, None, None, false)
         .context("Failed to connect to endpoint")?;
 
+    let mut result = check_result_from_tls_stream(&ssl_stream, host, port, verify)?;
+
+    let version_support = probe_tls_versions(host, port);
+    let cipher_scan = if full_scan {
+        probe_protocol_cipher_support(host, port, &version_support)
+    } else {
+        Vec::new()
+    };
+    result.version_support = version_support;
+    result.cipher_scan = cipher_scan;
+    Ok(result)
+}
+
+/// Extract certificate and negotiated-cipher details from an established TLS stream.
+pub(crate) fn check_result_from_tls_stream<S: Read + Write>(
+    ssl_stream: &openssl::ssl::SslStream<S>,
+    host: &str,
+    port: u16,
+    verify: bool,
+) -> Result<TlsCheckResult> {
     let ssl = ssl_stream.ssl();
     let cipher = current_cipher_info(ssl);
 
@@ -202,21 +223,14 @@ pub fn connect_and_check(
         None
     };
 
-    let version_support = probe_tls_versions(host, port);
-    let cipher_scan = if full_scan {
-        probe_protocol_cipher_support(host, port, &version_support)
-    } else {
-        Vec::new()
-    };
-
     Ok(TlsCheckResult {
         host: host.to_string(),
         port,
         cipher,
         cert_chain,
         cert_chain_pem,
-        version_support,
-        cipher_scan,
+        version_support: Vec::new(),
+        cipher_scan: Vec::new(),
         validation,
         chain_sent_out_of_order: peer_chain.sent_out_of_order,
     })

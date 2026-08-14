@@ -124,7 +124,7 @@ pub enum OpRequest {
     #[serde(rename_all = "camelCase")]
     InspectPfx { input: String, password: Secret },
 
-    /// HTTPS, LDAPS, and SMTP verification share one variant because the
+    /// HTTPS, LDAPS, SMTP, and SQL Server verification share one variant because the
     /// handshake and reporting are identical; only transport setup differs.
     #[serde(rename_all = "camelCase")]
     VerifyEndpoint {
@@ -741,11 +741,15 @@ fn verify_endpoint(
         EndpointProtocol::Https => ActionKind::VerifyHttps,
         EndpointProtocol::Ldaps => ActionKind::VerifyLdaps,
         EndpointProtocol::Smtp => ActionKind::VerifySmtp,
+        EndpointProtocol::SqlServer => ActionKind::VerifySqlServer,
     };
 
     let check = match protocol {
         EndpointProtocol::Smtp => {
             ssl_toolbox_core::smtp::connect_and_check_smtp(&host, port, verify)
+        }
+        EndpointProtocol::SqlServer => {
+            ssl_toolbox_core::mssql::connect_and_check_sql_server(&host, port, verify)
         }
         _ => ssl_toolbox_core::tls::connect_and_check(&host, port, verify, full_scan),
     };
@@ -800,6 +804,7 @@ fn verify_endpoint(
         EndpointProtocol::Https => "https_host",
         EndpointProtocol::Ldaps => "ldaps_host",
         EndpointProtocol::Smtp => "smtp_host",
+        EndpointProtocol::SqlServer => "sql_server_host",
     };
 
     Ok(OpResult {

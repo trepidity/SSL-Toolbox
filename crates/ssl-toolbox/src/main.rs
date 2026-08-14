@@ -193,6 +193,22 @@ enum Commands {
         #[arg(short, long)]
         out: Option<String>,
     },
+    /// Verify the certificate SQL Server presents after TDS encryption negotiation
+    VerifySqlServer {
+        #[arg(short = 'H', long)]
+        host: String,
+        #[arg(short, long, default_value = "1433")]
+        port: u16,
+        /// Skip certificate validation
+        #[arg(long)]
+        no_verify: bool,
+        /// Save results to a file
+        #[arg(short, long)]
+        out: Option<String>,
+        /// Export returned certificate chain as one PEM file per certificate into DIR
+        #[arg(long, value_name = "DIR")]
+        export_certs: Option<String>,
+    },
     /// Initialize config files in .ssl-toolbox/ directory
     Init {
         /// Create config in ~/.ssl-toolbox/ instead of ./.ssl-toolbox/
@@ -480,6 +496,26 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
                 !no_verify,
                 false,
                 None,
+                None,
+                out,
+            )?;
+        }
+
+        Commands::VerifySqlServer {
+            host,
+            port,
+            no_verify,
+            out,
+            export_certs,
+        } => {
+            verify(
+                EndpointProtocol::SqlServer,
+                host,
+                port,
+                1433,
+                !no_verify,
+                false,
+                export_certs,
                 None,
                 out,
             )?;

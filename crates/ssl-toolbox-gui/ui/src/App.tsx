@@ -144,6 +144,13 @@ const NAV: NavGroup[] = [
         title: "Verify SMTP endpoint",
         subtitle: "Check the certificate presented after STARTTLS",
       },
+      {
+        id: "sqlServer",
+        glyph: "→",
+        label: "SQL Server",
+        title: "Verify SQL Server endpoint",
+        subtitle: "Check the certificate presented after TDS encryption negotiation",
+      },
     ],
   },
   {
@@ -230,7 +237,7 @@ export default function App() {
       <nav className="rail">
         <div className="rail-brand">
           <strong>SSL Toolbox</strong>
-          <span>v2.1.0</span>
+          <span>v2.1.1</span>
         </div>
         {NAV.map((group) => (
           <div className="rail-group" key={group.label}>
@@ -271,6 +278,7 @@ export default function App() {
         {active === "https" ? <VerifyView protocol="https" key="https" /> : null}
         {active === "ldaps" ? <VerifyView protocol="ldaps" key="ldaps" /> : null}
         {active === "smtp" ? <VerifyView protocol="smtp" key="smtp" /> : null}
+        {active === "sqlServer" ? <VerifyView protocol="sqlServer" key="sqlServer" /> : null}
         {active === "caprofiles" ? <CaProfilesView /> : null}
         {active === "casubmit" ? <CaSubmitView /> : null}
         {active === "cacollect" ? <CaCollectView /> : null}

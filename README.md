@@ -17,7 +17,7 @@ Both drive the same `ssl-toolbox-ops` engine, so neither can do something the ot
 |---|---|
 | **Key & CSR** | Generate RSA 2048 private keys (AES-256-CBC encrypted) and CSRs with SANs (DNS, IP, email, URI) |
 | **PFX/PKCS12** | Create modern (AES-256-SHA256) or legacy (TripleDES-SHA1) PFX files; convert between formats; inspect contents |
-| **TLS Verification** | Probe HTTPS, LDAPS, and SMTP STARTTLS endpoints; report negotiated cipher, TLS version support (1.0-1.3), validate hostname/expiry/chain, and optionally run a full protocol/cipher-suite scan across the locally testable cipher set for HTTPS and LDAPS |
+| **TLS Verification** | Probe HTTPS, LDAPS, SMTP STARTTLS, and SQL Server endpoints; report negotiated cipher, TLS version support where the transport permits it, validate hostname/expiry/chain, and optionally run a full protocol/cipher-suite scan across the locally testable cipher set for HTTPS and LDAPS |
 | **Format Tools** | Convert between PEM, DER, and Base64; auto-detect certificate file formats |
 | **Config Generation** | Build OpenSSL `.cnf` files interactively or extract them from existing certificates and CSRs |
 | **Workflow** | Persistent workspace state tracks your active profile, artifacts, and recent jobs across sessions |
@@ -153,6 +153,7 @@ SCM_CLIENT_SECRET=<your client secret>
 | `verify-https --host HOST [--port PORT] [--no-verify] [--full-scan] [--out FILE] [--export-certs DIR]` | Check HTTPS endpoint |
 | `verify-ldaps --host HOST [--port PORT] [--no-verify] [--full-scan] [--ldap-config-test] [--ldap-port PORT] [--ldap-bind-dn DN] [--ldap-bind-password PASS] [--out FILE] [--export-certs DIR]` | Check LDAPS endpoint |
 | `verify-smtp --host HOST [--port PORT] [--no-verify] [--out FILE]` | Check SMTP STARTTLS endpoint |
+| `verify-sql-server --host HOST [--port PORT] [--no-verify] [--out FILE] [--export-certs DIR]` | Check SQL Server endpoint over TDS encryption negotiation |
 | `convert --input FILE --output FILE --format FORMAT` | Convert cert format (pem/der/base64) |
 | `identify --input FILE` | Auto-detect certificate format |
 | `ca list-profiles` | List available Sectigo cert types |

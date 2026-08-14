@@ -727,6 +727,9 @@ ssl-toolbox verify-ldaps --host ldap.corp.local --port 3269
 # SMTP with STARTTLS
 ssl-toolbox verify-smtp --host mail.example.com
 
+# SQL Server (TDS encryption negotiation; default port 1433)
+ssl-toolbox verify-sql-server --host sql.example.com
+
 # Self-signed or internal CA (skip validation, still shows cert info)
 ssl-toolbox verify-https --host internal.corp.local --no-verify
 ```

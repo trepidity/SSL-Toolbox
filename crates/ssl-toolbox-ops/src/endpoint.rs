@@ -12,7 +12,7 @@ use ssl_toolbox_core::TlsCheckResult;
 
 /// Which protocol a verification target speaks.
 ///
-/// The TLS handshake is identical across all three; the protocol only selects
+/// The TLS certificate report is consistent across all four; the protocol only selects
 /// the default port, how the session is established (direct vs. STARTTLS), and
 /// which follow-up probes are available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +21,8 @@ pub enum EndpointProtocol {
     Https,
     Ldaps,
     Smtp,
+    #[serde(rename = "sqlServer")]
+    SqlServer,
 }
 
 impl EndpointProtocol {
@@ -31,6 +33,7 @@ impl EndpointProtocol {
             // Submission on 587 is the documented default for both front-ends.
             // Port 25 remains available when an operator explicitly chooses it.
             Self::Smtp => 587,
+            Self::SqlServer => 1433,
         }
     }
 
@@ -39,13 +42,13 @@ impl EndpointProtocol {
             Self::Https => "HTTPS Endpoint Verification",
             Self::Ldaps => "LDAPS Endpoint Verification",
             Self::Smtp => "SMTP STARTTLS Endpoint Verification",
+            Self::SqlServer => "SQL Server Endpoint Verification",
         }
     }
 
-    /// SMTP negotiates TLS via STARTTLS after a plaintext greeting, so it
-    /// cannot participate in the direct-handshake cipher scan.
+    /// Only direct-TLS HTTPS and LDAPS can participate in the cipher scan.
     pub fn supports_full_scan(self) -> bool {
-        !matches!(self, Self::Smtp)
+        matches!(self, Self::Https | Self::Ldaps)
     }
 }
 

@@ -8,7 +8,7 @@ Authoritative reference for the design, cryptographic contracts, and operational
 
 ## 1. Core Concepts
 
-ssl-toolbox is a cross-platform toolkit for SSL/TLS certificate operations, delivered as a single-binary CLI and a desktop GUI over one shared engine. It generates RSA keys and CSRs, builds and inspects PKCS#12 containers, verifies TLS endpoints over HTTPS/LDAPS/SMTP-STARTTLS, converts between certificate encodings, and optionally submits CSRs to a pluggable Certificate Authority backend.
+ssl-toolbox is a cross-platform toolkit for SSL/TLS certificate operations, delivered as a single-binary CLI and a desktop GUI over one shared engine. It generates RSA keys and CSRs, builds and inspects PKCS#12 containers, verifies TLS endpoints over HTTPS/LDAPS/SMTP-STARTTLS/SQL Server, converts between certificate encodings, and optionally submits CSRs to a pluggable Certificate Authority backend.
 
 The workspace is structured around a hard separation of concerns:
 
@@ -74,6 +74,7 @@ Modules:
 | `pfx` | `create_pfx`, `create_pfx_legacy`, `create_pfx_legacy_3des`, `extract_pfx_details`, `extract_pfx_bundle_details` |
 | `tls` | `perform_tls_handshake`, `probe_tls_versions`, `connect_and_check` |
 | `smtp` | `connect_and_check_smtp` |
+| `mssql` | `connect_and_check_sql_server` |
 | `validation` | `validate_peer_cert` (hostname, expiry, chain) |
 | `x509_utils` | `x509_to_cert_details`, `extract_cert_chain_details`, `collect_peer_chain`, `extract_chain_from_ssl` |
 | `convert` | `detect_format`, `pem_to_der`, `der_to_pem`, `pem_to_base64`, `format_description` |
@@ -332,7 +333,7 @@ An empty cert list is a hard error (`"No certificates found in PFX file"`). A PF
 
 ## 6. TLS Verification
 
-Implementation: `ssl-toolbox-core::tls` (HTTPS/LDAPS) and `ssl-toolbox-core::smtp` (SMTP STARTTLS).
+Implementation: `ssl-toolbox-core::tls` (HTTPS/LDAPS), `ssl-toolbox-core::smtp` (SMTP STARTTLS), and `ssl-toolbox-core::mssql` (SQL Server).
 
 ### 6.1 Probe contracts
 
@@ -341,6 +342,7 @@ Implementation: `ssl-toolbox-core::tls` (HTTPS/LDAPS) and `ssl-toolbox-core::smt
 | `verify-https` | 443 | Direct TLS | — |
 | `verify-ldaps` | 636 | Direct TLS | Optional anonymous or authenticated RootDSE base search over the selected LDAPS port (636 by default) |
 | `verify-smtp` | 587 | Plaintext SMTP → STARTTLS | EHLO → STARTTLS → TLS handshake |
+| `verify-sql-server` | 1433 | TDS PRELOGIN → TLS | Requests encryption in TDS PRELOGIN, then inspects the presented TLS certificate |
 
 All probes use a **10-second TCP connect timeout** and **10-second read/write timeouts**.
 
@@ -353,7 +355,7 @@ Every verification populates a `TlsCheckResult` with:
 - `cert_chain: Vec<CertDetails>` — leaf-first path order reconstructed from issuer relationships (signature verification, then OpenSSL name/key-identifier matching, then subject/issuer DN equality — not wire order), deduplicated by DER
 - `chain_sent_out_of_order: bool` — true when the server's presented certificate order differed from the reconstructed path (a misconfiguration that can break strict, non-path-building TLS clients); surfaced as a warning in display output
 - `cert_chain_pem: Vec<String>` — the same returned certificates encoded as PEM, used by `--export-certs`
-- `version_support: Vec<TlsVersionProbeResult>` — per-protocol handshake result for TLS 1.0, 1.1, 1.2, 1.3 (empty for SMTP; see 6.4)
+- `version_support: Vec<TlsVersionProbeResult>` — per-protocol handshake result for TLS 1.0, 1.1, 1.2, 1.3 (empty for SMTP and SQL Server; see 6.4)
 - `cipher_scan: Vec<TlsCipherScanResult>` — populated only when `--full-scan` is passed
 - `validation: Option<CertValidation>` — populated only when verification is enabled
 
@@ -389,7 +391,13 @@ Ciphers on protocols the server rejected in the version probe are not tested. A 
 
 SMTP does **not** populate `version_support` or `cipher_scan`. Reconnecting for each protocol version would require redoing the SMTP preamble every time; that cost is not amortised until demand appears.
 
-### 6.5 `--no-verify` semantics
+### 6.5 SQL Server
+
+`connect_and_check_sql_server` first attempts the direct TLS form used by SQL Server 2022 TDS 8.0 strict mode. For compatible TDS 7.x endpoints, it reconnects, sends a PRELOGIN message with `ENCRYPT_ON`, requires the server to negotiate encryption, and carries the TLS handshake in TDS `0x12` packets. The check does not authenticate or send a LOGIN7 message.
+
+SQL Server does **not** populate `version_support` or `cipher_scan`: each extra TLS handshake requires a separate TDS negotiation and the default check must not send a database login.
+
+### 6.6 `--no-verify` semantics
 
 `--no-verify` disables **chain validation only**. Hostname match, expiry, negotiated cipher, version probing, and chain extraction are all still performed and reported. The `validation` field is set to `None` when `--no-verify` is passed; otherwise it contains all three sub-checks.
 
@@ -570,7 +578,7 @@ struct UiState {
 }
 ```
 
-`WorkflowMemory` holds the currently-active artifacts (config, key, csr, cert, chain, pfx, legacy_pfx) and endpoint hosts (https_host, ldaps_host, smtp_host) along with the **active profile**. Both front-ends pre-fill from `WorkflowMemory` and from the last-used value in `recent_paths`.
+`WorkflowMemory` holds the currently-active artifacts (config, key, csr, cert, chain, pfx, legacy_pfx) and endpoint hosts (https_host, ldaps_host, smtp_host, sql_server_host) along with the **active profile**. Both front-ends pre-fill from `WorkflowMemory` and from the last-used value in `recent_paths`.
 
 ### 10.3 Active profile
 
@@ -717,6 +725,12 @@ TripleDES-SHA1 is no longer considered strong; SHA-1 is collision-broken and Tri
 `verify-smtp` reports only the negotiated cipher and certificate data; `version_support` and `cipher_scan` are empty.
 
 **Accepted because:** every additional TLS handshake against an SMTP server requires a full plaintext EHLO→STARTTLS preamble and a fresh TCP connection. That is 5 roundtrips per cipher suite per protocol version. The cost is not yet justified. If demand appears, the feature lives behind a future `--full-scan` flag that inherits the HTTPS probing model.
+
+### SQL Server has no version probing or cipher scan
+
+`verify-sql-server` reports the negotiated cipher and certificate data after either TDS 8.0 direct TLS or a TDS 7.x PRELOGIN negotiation. `version_support` and `cipher_scan` are empty.
+
+**Accepted because:** each probe needs a fresh TCP connection and TDS encryption negotiation. The check deliberately stops before LOGIN7, so it can inspect a certificate without credentials or database side effects.
 
 ### No certificate chain re-ordering at build time
 

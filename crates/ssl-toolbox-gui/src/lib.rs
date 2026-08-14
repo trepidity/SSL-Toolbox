@@ -90,6 +90,7 @@ fn list_actions() -> Vec<ActionInfo> {
         ActionKind::VerifyHttps,
         ActionKind::VerifyLdaps,
         ActionKind::VerifySmtp,
+        ActionKind::VerifySqlServer,
         ActionKind::Convert,
         ActionKind::Identify,
     ];

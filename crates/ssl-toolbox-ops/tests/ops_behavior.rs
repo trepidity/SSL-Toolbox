@@ -232,6 +232,32 @@ fn op_requests_deserialize_from_the_camel_case_wire_shape() {
     }
 }
 
+/// The desktop client sends protocol names over the Tauri IPC boundary, so a
+/// SQL Server request must remain accepted by the shared ops contract.
+#[test]
+fn sql_server_endpoint_requests_deserialize_from_the_camel_case_wire_shape() {
+    let request: OpRequest = serde_json::from_str(
+        r#"{
+            "op": "verifyEndpoint",
+            "protocol": "sqlServer",
+            "host": "db.example.test"
+        }"#,
+    )
+    .expect("the GUI's SQL Server request shape must deserialize");
+
+    match request {
+        OpRequest::VerifyEndpoint { protocol, host, .. } => {
+            assert_eq!(protocol, ssl_toolbox_ops::EndpointProtocol::SqlServer);
+            assert_eq!(host, "db.example.test");
+            assert_eq!(
+                serde_json::to_value(protocol).expect("protocol serializes"),
+                serde_json::Value::String("sqlServer".to_string()),
+            );
+        }
+        other => panic!("expected VerifyEndpoint, got {other:?}"),
+    }
+}
+
 /// A bad collect format is rejected before the CA plugin is constructed.
 ///
 /// Otherwise the user's first error is "SCM_CLIENT_ID not set" — a credentials

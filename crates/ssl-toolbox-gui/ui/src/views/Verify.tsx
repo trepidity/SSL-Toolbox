@@ -20,12 +20,14 @@ const DEFAULT_PORT: Record<EndpointProtocol, number> = {
   https: 443,
   ldaps: 636,
   smtp: 587,
+  sqlServer: 1433,
 };
 
 const PLACEHOLDER: Record<EndpointProtocol, string> = {
   https: "example.com  ·  https://example.com:8443",
   ldaps: "ldap.example.com",
   smtp: "smtp.example.com",
+  sqlServer: "sql.example.com  ·  sql.example.com:1433",
 };
 
 /** Protocol versions that should read as a finding, not a capability. */
@@ -100,7 +102,7 @@ export function VerifyView({ protocol }: { protocol: EndpointProtocol }) {
             checked={verify}
             onChange={setVerify}
           />
-          {protocol !== "smtp" ? (
+          {protocol === "https" || protocol === "ldaps" ? (
             <Checkbox
               label="Full scan — probe every protocol version and cipher"
               checked={fullScan}

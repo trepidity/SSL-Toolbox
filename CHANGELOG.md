@@ -6,6 +6,19 @@ All notable changes to ssl-toolbox are documented here.
 
 ## [Unreleased]
 
+---
+
+## v2.1.1 — 2026-08-13
+
+### feat: verify SQL Server certificates
+
+Added `verify-sql-server` for checking the certificate SQL Server presents on
+TCP 1433 (or a supplied port). The check supports direct TLS for TDS 8.0 strict
+mode and TDS PRELOGIN negotiation for traditional SQL Server endpoints, then
+stops before authentication or SQL execution. The same capability is available
+in the desktop Verify navigation, persists its endpoint history, and can export
+the presented chain as PEM files.
+
 ### fix: desktop app could not be built from a clean checkout
 
 `tauri.conf.json` set `frontendDist` to `../ui/dist`, the path that is correct

@@ -3,6 +3,7 @@ pub mod config;
 pub mod convert;
 pub mod key_csr;
 pub mod ldap;
+pub mod mssql;
 pub mod pfx;
 pub mod smtp;
 pub mod tls;

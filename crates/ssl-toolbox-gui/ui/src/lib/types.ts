@@ -8,7 +8,7 @@
  * field here, rename it there too or the app breaks silently at runtime.
  */
 
-export type EndpointProtocol = "https" | "ldaps" | "smtp";
+export type EndpointProtocol = "https" | "ldaps" | "smtp" | "sqlServer";
 
 export type CertFormat = "Pem" | "Der" | "Pkcs12" | "Pkcs7" | "Base64" | "Unknown";
 
@@ -154,6 +154,7 @@ export type ActionKind =
   | "VerifyHttps"
   | "VerifyLdaps"
   | "VerifySmtp"
+  | "VerifySqlServer"
   | "Convert"
   | "Identify"
   | "CaSubmit"
@@ -180,6 +181,7 @@ export interface WorkflowMemory {
   https_host: string | null;
   ldaps_host: string | null;
   smtp_host: string | null;
+  sql_server_host: string | null;
   active_profile: string | null;
 }
 
