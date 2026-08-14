@@ -158,7 +158,10 @@ export type ActionKind =
   | "Convert"
   | "Identify"
   | "CaSubmit"
-  | "CaProfiles";
+  | "CaProfiles"
+  | "CaSettings"
+  | "CaCredentials"
+  | "CaSearch";
 
 export interface JobRecord {
   kind: ActionKind;
@@ -167,6 +170,7 @@ export interface JobRecord {
   outputs: Record<string, string>;
   replay_data: Record<string, string>;
   profile: string | null;
+  transient: boolean;
   timestamp_secs: number;
 }
 
@@ -189,6 +193,7 @@ export interface SessionState {
   workflow: WorkflowMemory;
   recentJobs: JobRecord[];
   csrDefaults: CsrDefaults;
+  caRequests: CaRequestRecord[];
 }
 
 export interface WorkspaceFile {
@@ -224,6 +229,38 @@ export interface LdapConfigTest {
  * config syntax can express. `x400Address` and `ediPartyName` are excluded
  * because `openssl.cnf` has no syntax for them at all.
  */
+/**
+ * Where an inspection reads from. Mirrors `InputSource` in Rust, which is a
+ * serde-tagged enum — the `kind` discriminant is part of the wire shape.
+ */
+export type InputSource = { kind: "path"; path: string } | { kind: "text"; text: string };
+
+/** A CSR previously submitted to a CA, remembered so its ID can be offered back. */
+export interface CaRequestRecord {
+  request_id: string;
+  common_name: string;
+  description: string;
+  profile: string;
+  csr_path: string;
+  timestamp_secs: number;
+}
+
+/**
+ * The retrieve formats the CA offers, matching its console menu so a value
+ * picked here means the same thing as one picked in the browser.
+ *
+ * Tokens are the contract with `CollectFormat::parse` in Rust.
+ */
+export const COLLECT_FORMATS: { token: string; label: string }[] = [
+  { token: "cert", label: "Certificate only, PEM encoded" },
+  { token: "cert-issuer-after", label: "Certificate (w/ issuer after), PEM encoded" },
+  { token: "chain", label: "Certificate (w/ chain), PEM encoded" },
+  { token: "pkcs7", label: "PKCS#7" },
+  { token: "pkcs7-pem", label: "PKCS#7, PEM encoded" },
+  { token: "intermediates", label: "Intermediate(s)/Root only, PEM encoded" },
+  { token: "root-first", label: "Root/Intermediate(s) only, PEM encoded" },
+];
+
 export type SanKind = "dns" | "ip" | "email" | "uri" | "registeredId" | "otherName" | "dirName";
 
 export interface SanName {
@@ -307,8 +344,8 @@ export type OpRequest =
   | { op: "generateConfigFromCertOrCsr"; input: string; out: string; isCsr?: boolean }
   | { op: "loadConfig"; path: string }
   | { op: "saveConfig"; path: string; text: string }
-  | { op: "inspectCert"; input: string }
-  | { op: "inspectCsr"; input: string }
+  | { op: "inspectCert"; input: InputSource }
+  | { op: "inspectCsr"; input: InputSource }
   | { op: "inspectPfx"; input: string; password: string }
   | {
       op: "verifyEndpoint";
@@ -326,7 +363,8 @@ export type OpRequest =
   | {
       op: "caSubmitCsr";
       csr: string;
-      out: string;
+      /** Optional: the ID is recorded in the workspace regardless. */
+      out?: string | null;
       description?: string | null;
       productCode?: string | null;
       termDays?: number | null;
@@ -338,7 +376,66 @@ export type OpRequest =
       out: string;
       format: string;
       debug?: boolean;
-    };
+    }
+  | {
+      op: "caSearchCertificates";
+      commonName?: string | null;
+      subjectAlternativeName?: string | null;
+      serialNumber?: string | null;
+      status?: string | null;
+      profileId?: string | null;
+      size?: number | null;
+      position?: number | null;
+      includeDates?: boolean;
+      debug?: boolean;
+    }
+  | { op: "caCertificateDetails"; certificateId: string; debug?: boolean }
+  | { op: "caListRequests" }
+  | { op: "caLoadSettings" }
+  | {
+      op: "caSaveSettings";
+      apiBase: string;
+      orgId: string;
+      productCode: string;
+      tokenUrl: string;
+    }
+  | {
+      op: "caStoreCredentials";
+      clientId: string;
+      clientSecret: string;
+      vaultPassphrase: string;
+    }
+  | { op: "caUnlockCredentials"; vaultPassphrase: string }
+  | { op: "caLockCredentials" }
+  | { op: "caClearCredentials" }
+  | { op: "caTestConnection"; debug?: boolean };
+
+/** One row of a certificate search. `id` is what the Collect screen takes. */
+export interface CertificateSummary {
+  id: string;
+  common_name: string;
+  subject_alternative_names: string[];
+  serial_number: string;
+  status: string | null;
+  requested: string | null;
+  expires: string | null;
+}
+
+/** Fields are optional because this is a vendor payload — render gaps, not errors. */
+export interface CertificateDetails {
+  id: string;
+  common_name: string;
+  subject_alternative_names: string[];
+  serial_number: string;
+  status: string | null;
+  profile: string | null;
+  term_days: number | null;
+  requested: string | null;
+  expires: string | null;
+  requester: string | null;
+  comments: string | null;
+  key_algorithm: string | null;
+}
 
 export interface CertProfile {
   id: string;
@@ -362,11 +459,56 @@ export type OpOutcome =
   | { outcome: "configLoaded"; path: string; text: string; summary: ConfigSummary }
   | { outcome: "configSaved"; path: string; backup: string | null; summary: ConfigSummary }
   | { outcome: "certInspected"; path: string; chain: CertDetails[] }
-  | { outcome: "csrInspected"; path: string; commonName: string; sans: string[] }
+  | { outcome: "csrInspected"; path: string; commonName: string; sans: string[]; pem: string }
   | { outcome: "pfxInspected"; path: string; details: PfxDetails }
   | ({ outcome: "endpointVerified" } & EndpointVerification)
   | { outcome: "formatConverted"; output: string; format: string }
   | { outcome: "formatIdentified"; path: string; format: CertFormat; description: string }
   | { outcome: "caProfilesListed"; provider: string; profiles: CertProfile[] }
-  | { outcome: "caCsrSubmitted"; requestId: string; path: string }
-  | { outcome: "caCertCollected"; path: string; format: string };
+  | { outcome: "caCsrSubmitted"; requestId: string; path: string | null }
+  | { outcome: "caRequestsListed"; requests: CaRequestRecord[] }
+  | {
+      outcome: "caCertificatesFound";
+      provider: string;
+      certificates: CertificateSummary[];
+      position: number;
+      mayHaveMore: boolean;
+    }
+  | { outcome: "caCertificateLoaded"; provider: string; certificate: CertificateDetails }
+  | { outcome: "caCertCollected"; path: string; format: string }
+  | ({ outcome: "caSettingsLoaded" } & CaSettingsView)
+  | { outcome: "caSettingsSaved"; path: string; shadowedBy: string | null }
+  | { outcome: "caCredentialsChanged"; status: CredentialStatus }
+  | { outcome: "caConnectionVerified"; provider: string; source: CredentialSource };
+
+/** Which configuration layer is currently supplying CA credentials. */
+export type CredentialSource = "environment" | "vault";
+
+/**
+ * What the UI is allowed to know about the stored credentials.
+ *
+ * The client ID is deliberately absent — only its length crosses the boundary.
+ * See `CredentialStatus` in Rust and ARCHITECTURE.md §11.3 rule 1.
+ */
+export interface CredentialStatus {
+  environmentOverride: boolean;
+  vaultPresent: boolean;
+  unlocked: boolean;
+  activeSource: CredentialSource | null;
+  clientIdLength: number | null;
+  vaultPath: string | null;
+  /** Why the current configuration is unusable, when it is. */
+  problem: string | null;
+}
+
+export interface CaSettingsView {
+  provider: string | null;
+  apiBase: string;
+  orgId: string;
+  productCode: string;
+  tokenUrl: string;
+  configPath: string | null;
+  shadowedBy: string | null;
+  environmentOverrides: string[];
+  credentials: CredentialStatus;
+}

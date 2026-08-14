@@ -8,6 +8,7 @@ pub mod pfx;
 pub mod smtp;
 pub mod tls;
 pub mod validation;
+pub mod vault;
 pub mod x509_utils;
 
 pub use cert_types::*;

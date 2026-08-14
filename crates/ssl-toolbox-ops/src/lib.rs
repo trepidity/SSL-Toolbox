@@ -10,6 +10,7 @@
 //! do: collecting secrets from the user, and rendering results for humans.
 
 pub mod audit;
+pub mod credentials;
 pub mod endpoint;
 pub mod ops;
 pub mod secret;
@@ -19,3 +20,6 @@ pub mod workflow;
 pub use endpoint::EndpointProtocol;
 pub use ops::{OpOutcome, OpRequest, OpResult, run};
 pub use secret::Secret;
+/// Re-exported so front-ends can validate a format choice without depending on
+/// the CA trait crate directly.
+pub use ssl_toolbox_ca::{CertificateDetails, CertificateSummary, CollectFormat};

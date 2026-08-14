@@ -4,17 +4,23 @@ import {
   Banner,
   CertCard,
   CertChain,
+  CopyButton,
   Empty,
   Panel,
   PathField,
   SecretField,
+  SourceField,
   SubmitButton,
+  sourceIsReady,
 } from "../components";
 import { clearSecrets, useSecret } from "../lib/secrets";
+import type { InputSource } from "../lib/types";
 import { useOp } from "../lib/useOp";
 
+const EMPTY_SOURCE: InputSource = { kind: "path", path: "" };
+
 export function InspectCertView() {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState<InputSource>(EMPTY_SOURCE);
   const op = useOp();
 
   async function submit(event: React.FormEvent) {
@@ -26,8 +32,8 @@ export function InspectCertView() {
     <div className="main-body">
       <div className="pane">
         <form className="form" onSubmit={submit}>
-          <PathField
-            label="Certificate file"
+          <SourceField
+            label="Certificate"
             hint="PEM bundles are expanded into the full chain."
             value={input}
             onChange={setInput}
@@ -35,7 +41,7 @@ export function InspectCertView() {
             filters={[{ name: "Certificate", extensions: ["crt", "cer", "pem"] }]}
           />
           <div className="actions">
-            <SubmitButton busy={op.busy} label="Inspect" disabled={!input} />
+            <SubmitButton busy={op.busy} label="Inspect" disabled={!sourceIsReady(input)} />
           </div>
         </form>
       </div>
@@ -61,7 +67,7 @@ export function InspectCertView() {
 }
 
 export function InspectCsrView() {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState<InputSource>(EMPTY_SOURCE);
   const op = useOp();
 
   async function submit(event: React.FormEvent) {
@@ -73,22 +79,29 @@ export function InspectCsrView() {
     <div className="main-body">
       <div className="pane">
         <form className="form" onSubmit={submit}>
-          <PathField
-            label="CSR file"
+          <SourceField
+            label="CSR"
             value={input}
             onChange={setInput}
             placeholder="server.csr"
             filters={[{ name: "CSR", extensions: ["csr", "pem"] }]}
+            pasteHint="Paste the request, or just its base64 body."
           />
           <div className="actions">
-            <SubmitButton busy={op.busy} label="Inspect" disabled={!input} />
+            <SubmitButton busy={op.busy} label="Inspect" disabled={!sourceIsReady(input)} />
           </div>
         </form>
       </div>
       <div className="pane">
         {op.error ? <Banner tone="danger" title="Could not read CSR">{op.error}</Banner> : null}
         {op.outcome?.outcome === "csrInspected" ? (
-          <Panel title="Certificate signing request">
+          <Panel
+            title="Certificate signing request"
+            // Copying the request is the next step after confirming the subject
+            // — it is what gets pasted into a CA's enrolment form. The PEM is
+            // re-emitted by ops, so this works for a DER file too.
+            aside={<CopyButton text={op.outcome.pem} label="Copy CSR" />}
+          >
             <dl className="kv">
               <dt>Common Name</dt>
               <dd>{op.outcome.commonName}</dd>

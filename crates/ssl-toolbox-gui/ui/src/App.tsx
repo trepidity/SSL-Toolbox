@@ -12,7 +12,9 @@ import { EditConfigView } from "./views/ConfigEdit";
 import { InspectCertView, InspectCsrView, InspectPfxView } from "./views/Inspect";
 import { VerifyView } from "./views/Verify";
 import { HistoryView } from "./views/History";
-import { CaCollectView, CaProfilesView, CaSubmitView } from "./views/Ca";
+import { CaCollectView, CaSubmitView } from "./views/Ca";
+import { CaSearchView } from "./views/CaSearch";
+import { SettingsView } from "./views/Settings";
 
 interface NavItem {
   id: string;
@@ -95,14 +97,14 @@ const NAV: NavGroup[] = [
         glyph: "◦",
         label: "Certificate",
         title: "Inspect certificate",
-        subtitle: "Subject, issuer, validity, SANs, fingerprints",
+        subtitle: "Open a file or paste PEM — subject, issuer, validity, SANs, fingerprints",
       },
       {
         id: "viewcsr",
         glyph: "◦",
         label: "CSR",
         title: "Inspect CSR",
-        subtitle: "Confirm the subject and SANs before submitting",
+        subtitle: "Open a file or paste a request; confirm the subject and SANs before submitting",
       },
       {
         id: "viewpfx",
@@ -157,25 +159,32 @@ const NAV: NavGroup[] = [
     label: "Certificate Authority",
     items: [
       {
-        id: "caprofiles",
+        id: "casearch",
         glyph: "A",
-        label: "Profiles",
-        title: "CA certificate profiles",
-        subtitle: "List the certificate types this CA account can issue",
+        label: "Find certificate",
+        title: "Find a certificate",
+        subtitle: "Search what the CA has already issued by name, SAN, or serial",
       },
       {
         id: "casubmit",
         glyph: "A",
         label: "Submit CSR",
         title: "Submit CSR to CA",
-        subtitle: "Send a signing request and record the returned request ID",
+        subtitle: "Pick a profile and term, send the request, and record the ID it returns",
       },
       {
         id: "cacollect",
         glyph: "A",
         label: "Collect cert",
         title: "Collect signed certificate",
-        subtitle: "Download an issued certificate by its request ID",
+        subtitle: "Download an issued certificate in any format the CA offers",
+      },
+      {
+        id: "casettings",
+        glyph: "⚙",
+        label: "Settings",
+        title: "Certificate Authority settings",
+        subtitle: "Endpoint configuration and the credentials used to authenticate",
       },
     ],
   },
@@ -279,9 +288,10 @@ export default function App() {
         {active === "ldaps" ? <VerifyView protocol="ldaps" key="ldaps" /> : null}
         {active === "smtp" ? <VerifyView protocol="smtp" key="smtp" /> : null}
         {active === "sqlServer" ? <VerifyView protocol="sqlServer" key="sqlServer" /> : null}
-        {active === "caprofiles" ? <CaProfilesView /> : null}
+        {active === "casearch" ? <CaSearchView /> : null}
         {active === "casubmit" ? <CaSubmitView /> : null}
         {active === "cacollect" ? <CaCollectView /> : null}
+        {active === "casettings" ? <SettingsView /> : null}
         {active === "convert" ? <ConvertView /> : null}
         {active === "history" ? <HistoryView recentJobs={recentJobs} /> : null}
       </main>

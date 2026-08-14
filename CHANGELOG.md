@@ -6,6 +6,116 @@ All notable changes to ssl-toolbox are documented here.
 
 ## [Unreleased]
 
+### perf: CA operations reuse their access token, and time out
+
+Every CA call re-authenticated before doing its work, so each operation cost two
+round trips. A token is now reused for four minutes, which matters most to
+search: filling in dates for a 25-row page drops from 50 requests to 26.
+`ca test-connection` still authenticates fresh, since proving the credentials
+work now is the whole point of it.
+
+CA requests also gained a 30-second timeout. They previously had none, against
+ARCHITECTURE.md §12.10 — a stalled connection hung the desktop app with no way
+out but force-quitting it.
+
+### feat: find a certificate the CA has already issued
+
+New **Certificate Authority → Find certificate** screen and `ssl-toolbox ca search`,
+matching on common name, subject alternative name, serial number, and status.
+Each row shows status, requested date, and expiry — with a badge for how long is
+left — so the list is answerable at a glance. The CA's list endpoint returns
+identifiers only, so those columns cost one extra request per row; they run in
+bounded concurrent batches against a cached token, and `ca search --no-dates`
+skips them. Opening a row fetches the rest: profile, term, requester, comments.
+
+The ID a result carries is the same one Collect takes, so finding a certificate
+and downloading it is one path instead of two. `ssl-toolbox ca show --id N` prints
+the full record.
+
+Search hits the classic `/api/ssl/v1` endpoint — the same API generation as
+enrolment and collection — and has been exercised against a live tenant.
+
+### change: the Profiles screen is gone
+
+Loading profiles is a button on Submit CSR, where a profile is actually chosen.
+`ssl-toolbox ca list-profiles` is unchanged.
+
+### fix: certificate collection requested the wrong artifact
+
+`--format chain` asked Sectigo for `x509CO`, which is *certificate only* — every
+chain download was silently a bare leaf. `--format pkcs7` sent `pkcs7`, which is
+not a value Sectigo accepts at all. Both are corrected against Sectigo's
+published `valid_formats` list, and the mapping is now pinned by a test.
+
+Collection also returns bytes rather than text, so the binary PKCS#7 format is
+no longer corrupted by a lossy UTF-8 round trip on the way to disk.
+
+### feat: all seven CA retrieve formats
+
+The collect screen and `ca collect --format` now offer what the CA console
+offers: certificate only, certificate with issuer after, certificate with chain,
+PKCS#7, PKCS#7 PEM, intermediates/root, and root/intermediates. The default
+changed from leaf-only to `chain`, which is what a web server usually needs.
+`--format pem` still resolves to certificate-only for anyone scripting it.
+
+### feat: submitted request IDs are remembered
+
+A request ID is the only handle on an in-flight order and arrives when nobody is
+writing things down. Submissions are now recorded in the workspace — subject,
+description, profile, and timestamp — and the desktop Collect screen offers them
+as a dropdown. `ssl-toolbox ca requests` prints the same list, so an ID submitted
+from the app is reachable from the terminal and vice versa.
+
+`ca submit --out` is now optional, since the ID no longer depends on a file.
+
+### feat: profile and term pickers on Submit CSR
+
+Submitting requires a certificate profile, which previously meant typing a
+product code from memory. The submit screen now has a **Load profiles** button, a
+profile dropdown, and a term dropdown whose options come from the selected
+profile — the CA rejects any other term, so it is no longer possible to type one.
+
+### feat: paste a certificate or CSR instead of picking a file
+
+Inspect Certificate and Inspect CSR accept pasted PEM, or the bare base64 body
+with the `-----BEGIN-----` lines stripped off, which is how these usually arrive
+in a ticket. Inspect CSR also gained a Copy button; what it copies is normalised
+PEM, so it works even when the request was supplied as DER or as bare base64.
+
+### feat: every CLI report can be saved
+
+`view-cert`, `view-csr`, `view-pfx`, `view-config`, `identify`, `ca list-profiles`,
+`ca requests`, and `ca settings` take `--out FILE`, matching the `verify-*`
+commands. The file gets exactly what the terminal got.
+
+### feat: CA credentials move from `.env` into an encrypted vault
+
+CA client credentials no longer have to live in a `.env` file. They are stored
+in `~/.ssl-toolbox/credentials.vault`, sealed with scrypt + AES-256-GCM under a
+passphrase you choose, and both front-ends read the same vault.
+
+This fixes a defect rather than adding a convenience: the desktop app never
+loaded `.env`, and an app launched from Finder or the Start menu inherits no
+shell environment — so the CA screens could not authenticate at all outside a
+terminal-launched build.
+
+- **Desktop** — new **Certificate Authority → Settings** screen for the endpoint
+  configuration, the stored credentials, and a Test connection check. It shows
+  which configuration layer each value is coming from, so a saved value that is
+  being shadowed by a project file or an environment variable is visible rather
+  than mysterious.
+- **CLI** — `ca settings`, `ca configure`, `ca login`, `ca logout`, and
+  `ca test-connection`. No `--client-secret` flag exists: a secret passed as an
+  argument lands in shell history and `ps` output, so it is prompted for.
+- **Environment variables still override the vault.** CI jobs, containers, and
+  jump hosts that export `SCM_CLIENT_ID` / `SCM_CLIENT_SECRET` are unaffected.
+  Setting only one of the pair is now an error instead of a silent fallthrough
+  to the vault, which would have authenticated as a different account.
+- `ssl-toolbox-ca-sectigo` no longer reads the environment; it is handed an
+  identity by `ssl-toolbox-ops`, which owns credential resolution.
+
+The vault passphrase is the only key — there is no recovery if it is lost.
+
 ---
 
 ## v2.1.4 — 2026-08-13

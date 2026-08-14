@@ -60,6 +60,13 @@ async fn run_op(request: OpRequest) -> CmdResult<OpOutcome> {
 /// Failure to persist is not worth failing the operation the user just ran, so
 /// it is swallowed — the artifact on disk is the real result.
 fn record_job(job: JobRecord) {
+    // Reads — opening the settings screen, unlocking the vault — are operations
+    // but not work. Recording them would push real certificate jobs out of a
+    // twenty-entry history.
+    if job.transient {
+        return;
+    }
+
     let mut state = settings::load_state();
     apply_job_to_workflow(&mut state.workflow, &job);
     push_recent_job(&mut state.recent_jobs, job);
@@ -98,6 +105,7 @@ fn list_actions() -> Vec<ActionInfo> {
     if cfg!(feature = "sectigo") {
         kinds.push(ActionKind::CaSubmit);
         kinds.push(ActionKind::CaProfiles);
+        kinds.push(ActionKind::CaSettings);
     }
 
     kinds
@@ -116,6 +124,8 @@ struct SessionState {
     workflow: ssl_toolbox_ops::workflow::WorkflowMemory,
     recent_jobs: Vec<JobRecord>,
     csr_defaults: ssl_toolbox_core::CsrDefaults,
+    /// Past CA submissions, so the collect screen can offer their IDs back.
+    ca_requests: Vec<ssl_toolbox_ops::workflow::CaRequestRecord>,
 }
 
 /// Workflow memory, recent jobs, and org CSR defaults, for pre-filling forms.
@@ -126,6 +136,7 @@ fn load_session() -> SessionState {
         workflow: config.ui_state.workflow,
         recent_jobs: config.ui_state.recent_jobs,
         csr_defaults: config.csr_defaults,
+        ca_requests: config.ui_state.ca_requests,
     }
 }
 

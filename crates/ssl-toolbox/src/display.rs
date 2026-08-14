@@ -75,24 +75,6 @@ fn certificate_label(cert_chain: &[CertDetails], idx: usize) -> &'static str {
     }
 }
 
-fn print_cert_detail_lines(prefix: &str, details: &CertDetails) {
-    println!("{prefix}  CommonName: {}", details.common_name);
-    println!("{prefix}  Issuer: {}", details.issuer);
-    println!("{prefix}  Serial Number: {}", details.serial_number);
-    println!(
-        "{prefix}  Signature Algorithm: {}",
-        details.signature_algorithm
-    );
-    println!("{prefix}  Public Key Bits: {}", details.public_key_bits);
-    println!("{prefix}  Valid From: {}", details.not_before);
-    println!("{prefix}  Valid Until: {}", details.not_after);
-    println!("{prefix}  SHA1 Fingerprint: {}", details.sha1_fingerprint);
-    println!(
-        "{prefix}  SHA256 Fingerprint: {}",
-        details.sha256_fingerprint
-    );
-}
-
 fn write_cert_detail_lines(output: &mut String, prefix: &str, details: &CertDetails) {
     writeln!(output, "{prefix}  CommonName: {}", details.common_name).unwrap();
     writeln!(output, "{prefix}  Issuer: {}", details.issuer).unwrap();
@@ -139,31 +121,43 @@ fn write_sans_lines(output: &mut String, prefix: &str, sans: &[String], show_non
     }
 }
 
-fn display_private_key_summary(summary: &PrivateKeySummary) {
-    println!("┌─ Private Key ────────────────────────────────────────────────");
-    println!(
+fn write_private_key_summary(output: &mut String, summary: &PrivateKeySummary) {
+    writeln!(
+        output,
+        "┌─ Private Key ────────────────────────────────────────────────"
+    )
+    .unwrap();
+    writeln!(
+        output,
         "│  Present:              {}",
         if summary.present { "Yes" } else { "No" }
-    );
+    )
+    .unwrap();
     if summary.present {
-        println!("│  Key Algorithm:        {}", summary.algorithm);
-        println!("│  Key Size:             {} bits", summary.key_size_bits);
-        println!("│  Security Bits:        {}", summary.security_bits);
-        println!(
+        writeln!(output, "│  Key Algorithm:        {}", summary.algorithm).unwrap();
+        writeln!(
+            output,
+            "│  Key Size:             {} bits",
+            summary.key_size_bits
+        )
+        .unwrap();
+        writeln!(output, "│  Security Bits:        {}", summary.security_bits).unwrap();
+        writeln!(
+            output,
             "│  Matches Leaf Cert:    {}",
             if summary.matches_leaf_certificate {
                 "Yes"
             } else {
                 "No"
             }
-        );
+        )
+        .unwrap();
     }
-    println!("└────────────────────────────────────────────────────────────────\n");
-}
-
-/// Display a pre-parsed list of certificate details.
-pub fn display_cert_details_list(cert_chain: &[CertDetails], title: &str) {
-    print!("{}", render_cert_details_list(cert_chain, title));
+    writeln!(
+        output,
+        "└────────────────────────────────────────────────────────────────\n"
+    )
+    .unwrap();
 }
 
 pub fn render_cert_details_list(cert_chain: &[CertDetails], title: &str) -> String {
@@ -225,50 +219,54 @@ pub fn render_cert_details_list(cert_chain: &[CertDetails], title: &str) -> Stri
     output
 }
 
-/// Display PFX contents including the private-key summary.
-pub fn display_pfx_details(details: &PfxDetails, title: &str) {
-    println!("\n╔═══════════════════════════════════════════════════════════════╗");
-    println!(
+pub fn render_pfx_details(details: &PfxDetails, title: &str) -> String {
+    let mut output = String::new();
+
+    writeln!(
+        &mut output,
+        "\n╔═══════════════════════════════════════════════════════════════╗"
+    )
+    .unwrap();
+    writeln!(
+        &mut output,
         "║  {:^59}  ║",
         format!("{} ({} certs)", title, details.cert_chain.len())
-    );
-    println!("╚═══════════════════════════════════════════════════════════════╝\n");
+    )
+    .unwrap();
+    writeln!(
+        &mut output,
+        "╚═══════════════════════════════════════════════════════════════╝\n"
+    )
+    .unwrap();
 
-    display_private_key_summary(&details.private_key);
+    write_private_key_summary(&mut output, &details.private_key);
 
     if details.cert_chain.len() == 1 {
         let cert = &details.cert_chain[0];
-        print_cert_detail_lines("", cert);
-        if cert.sans.is_empty() {
-            println!("  SANs: None");
-        } else {
-            println!("  SANs:");
-            for san in &cert.sans {
-                println!("    • {}", san);
-            }
-        }
-        println!();
-        return;
+        write_cert_detail_lines(&mut output, "", cert);
+        write_sans_lines(&mut output, "", &cert.sans, true);
+        writeln!(&mut output).unwrap();
+        return output;
     }
 
     for (idx, cert) in details.cert_chain.iter().enumerate() {
-        println!(
+        writeln!(
+            &mut output,
             "┌─ Certificate #{} - {} ─────────────────────────",
             idx + 1,
             certificate_label(&details.cert_chain, idx)
-        );
-        print_cert_detail_lines("│", cert);
-
-        if cert.sans.is_empty() {
-            println!("│  SANs: None");
-        } else {
-            println!("│  SANs:");
-            for san in &cert.sans {
-                println!("│    • {}", san);
-            }
-        }
-        println!("└────────────────────────────────────────────────────────────────\n");
+        )
+        .unwrap();
+        write_cert_detail_lines(&mut output, "│", cert);
+        write_sans_lines(&mut output, "│", &cert.sans, true);
+        writeln!(
+            &mut output,
+            "└────────────────────────────────────────────────────────────────\n"
+        )
+        .unwrap();
     }
+
+    output
 }
 
 pub fn render_tls_check_result(result: &TlsCheckResult, label: &str) -> String {

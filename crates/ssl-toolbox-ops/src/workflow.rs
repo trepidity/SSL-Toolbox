@@ -27,6 +27,9 @@ pub enum ActionKind {
     Identify,
     CaSubmit,
     CaProfiles,
+    CaSettings,
+    CaCredentials,
+    CaSearch,
 }
 
 impl ActionKind {
@@ -51,6 +54,9 @@ impl ActionKind {
             Self::Identify => "id",
             Self::CaSubmit => "submit",
             Self::CaProfiles => "profiles",
+            Self::CaSettings => "ca-settings",
+            Self::CaCredentials => "ca-credentials",
+            Self::CaSearch => "ca-search",
         }
     }
 
@@ -75,6 +81,9 @@ impl ActionKind {
             Self::Identify => "Identify Certificate Format",
             Self::CaSubmit => "CA: Submit CSR",
             Self::CaProfiles => "CA: List Profiles",
+            Self::CaSettings => "CA: Settings",
+            Self::CaCredentials => "CA: Credentials",
+            Self::CaSearch => "CA: Find Certificate",
         }
     }
 }
@@ -315,6 +324,13 @@ pub struct JobRecord {
     pub replay_data: BTreeMap<String, String>,
     pub profile: Option<String>,
     pub timestamp_secs: u64,
+    /// A job that describes a read, not work the user did.
+    ///
+    /// Opening a settings screen runs an operation, but listing "Loaded CA
+    /// settings" twenty times in recent jobs would bury the certificates the
+    /// history is actually for. Front-ends skip persisting these.
+    #[serde(default)]
+    pub transient: bool,
 }
 
 impl JobRecord {
@@ -326,6 +342,7 @@ impl JobRecord {
             outputs: BTreeMap::new(),
             replay_data: BTreeMap::new(),
             profile: None,
+            transient: false,
             timestamp_secs: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|value| value.as_secs())
@@ -347,6 +364,40 @@ impl JobRecord {
         self.replay_data.insert(key.to_string(), value.into());
         self
     }
+}
+
+/// A CSR submitted to a CA, kept so the collect step can offer it back.
+///
+/// A request ID is the only handle on an in-flight certificate order, it is
+/// long, and it arrives at the exact moment the operator is least likely to be
+/// writing things down. Losing it means hunting through the CA console. The CLI
+/// answers this by writing the ID to a file the caller names; a desktop user has
+/// no such step, so the app remembers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaRequestRecord {
+    pub request_id: String,
+    /// Subject CN of the submitted CSR — what makes one ID recognisable.
+    #[serde(default)]
+    pub common_name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Profile name if known, else the raw product code.
+    #[serde(default)]
+    pub profile: String,
+    #[serde(default)]
+    pub csr_path: String,
+    pub timestamp_secs: u64,
+}
+
+/// Remember a submitted request, newest first, without duplicating an ID.
+///
+/// Re-submitting the same CSR is a normal recovery step after a CA-side error,
+/// and it can return an ID already on the list; the entry is refreshed in place
+/// rather than appearing twice.
+pub fn push_ca_request(requests: &mut Vec<CaRequestRecord>, record: CaRequestRecord) {
+    requests.retain(|existing| existing.request_id != record.request_id);
+    requests.insert(0, record);
+    requests.truncate(50);
 }
 
 pub fn push_recent_job(jobs: &mut Vec<JobRecord>, job: JobRecord) {

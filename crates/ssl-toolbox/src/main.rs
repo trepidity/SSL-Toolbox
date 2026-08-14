@@ -18,7 +18,7 @@ use ssl_toolbox_core::{ConfigInputs, CsrDefaults, SanKind, SanName};
 use ssl_toolbox_ops::endpoint::{EndpointProtocol, format_connect_target};
 use ssl_toolbox_ops::ops::{LdapConfigTest, OpOutcome, OpRequest, OpResult};
 use ssl_toolbox_ops::secret::Secret;
-use ssl_toolbox_ops::{audit, settings};
+use ssl_toolbox_ops::{audit, credentials, settings};
 
 #[derive(Parser)]
 #[command(name = "ssl-toolbox", author, version, about = "SSL/TLS Security Toolbox", long_about = None)]
@@ -86,6 +86,9 @@ enum Commands {
     Identify {
         #[arg(short, long)]
         input: String,
+        /// Save the result to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// Generate a new OpenSSL configuration from scratch via interactive prompts
     NewConfig {
@@ -96,6 +99,9 @@ enum Commands {
     ViewConfig {
         #[arg(short, long)]
         input: String,
+        /// Save the config and its summary to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// Replace an existing OpenSSL config, keeping the previous contents as <path>.bak
     ///
@@ -119,16 +125,25 @@ enum Commands {
     ViewCert {
         #[arg(short, long)]
         input: String,
+        /// Save the rendered details to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// View details of a CSR
     ViewCsr {
         #[arg(short, long)]
         input: String,
+        /// Save the rendered details to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// View contents of a PFX/PKCS12 file
     ViewPfx {
         #[arg(short, long)]
         input: String,
+        /// Save the rendered details to a file
+        #[arg(short, long)]
+        out: Option<String>,
     },
     /// Verify TLS certificate and protocol for an HTTPS endpoint
     VerifyHttps {
@@ -223,17 +238,70 @@ enum Commands {
 #[derive(Subcommand)]
 enum CaCommands {
     /// List available certificate profiles
-    ListProfiles,
+    ListProfiles {
+        /// Save the profile list to a file
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// Find issued certificates at the CA
+    Search {
+        /// Match on common name
+        #[arg(long)]
+        common_name: Option<String>,
+        /// Match on a subject alternative name
+        #[arg(long)]
+        san: Option<String>,
+        /// Match on serial number
+        #[arg(long)]
+        serial: Option<String>,
+        /// Vendor status label, e.g. Issued or Revoked
+        #[arg(long)]
+        status: Option<String>,
+        /// Restrict to one certificate profile ID
+        #[arg(long)]
+        profile_id: Option<String>,
+        /// Results per page
+        #[arg(long)]
+        size: Option<u32>,
+        /// Offset of the first result
+        #[arg(long)]
+        position: Option<u32>,
+        /// Skip the per-result lookup that fills in status and dates
+        #[arg(long)]
+        no_dates: bool,
+        /// Save the results to a file
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// Show the full record for one certificate by its ID
+    Show {
+        #[arg(short, long)]
+        id: String,
+        /// Save the record to a file
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// List CSRs previously submitted from this workspace
+    Requests {
+        /// Save the list to a file
+        #[arg(short, long)]
+        out: Option<String>,
+    },
     /// Submit CSR to CA for signing
     Submit {
         #[arg(short, long)]
         csr: String,
+        /// Also write the returned request ID here. The ID is recorded in the
+        /// workspace either way — see `ca requests`.
         #[arg(short, long)]
-        out: String,
+        out: Option<String>,
         #[arg(short, long)]
         description: Option<String>,
         #[arg(short, long)]
         product_code: Option<String>,
+        /// Certificate lifetime in days; must be one the profile allows
+        #[arg(long)]
+        term_days: Option<i32>,
     },
     /// Collect/download a signed certificate by request ID
     Collect {
@@ -241,10 +309,36 @@ enum CaCommands {
         id: String,
         #[arg(short, long)]
         out: String,
-        /// Format: pem, chain, pkcs7
-        #[arg(short, long, default_value = "pem")]
+        /// cert, cert-issuer-after, chain, pkcs7, pkcs7-pem, intermediates, root-first
+        #[arg(short, long, default_value = "chain", value_parser = parse_collect_format)]
         format: String,
     },
+    /// Show CA endpoint settings and where credentials are coming from
+    Settings {
+        /// Save the summary to a file
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// Write CA endpoint settings to ~/.ssl-toolbox/sectigo.json
+    Configure {
+        #[arg(long)]
+        api_base: Option<String>,
+        #[arg(long)]
+        org_id: Option<String>,
+        #[arg(long)]
+        product_code: Option<String>,
+        #[arg(long)]
+        token_url: Option<String>,
+    },
+    /// Store a client ID and secret in the encrypted credential vault
+    Login {
+        #[arg(long)]
+        client_id: Option<String>,
+    },
+    /// Delete the credential vault
+    Logout,
+    /// Authenticate against the CA without performing an operation
+    TestConnection,
 }
 
 fn main() -> Result<()> {
@@ -343,12 +437,18 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             })?);
         }
 
-        Commands::Identify { input } => {
-            report(ssl_toolbox_ops::run(OpRequest::IdentifyFormat { input })?);
+        Commands::Identify { input, out } => {
+            report_saving(
+                ssl_toolbox_ops::run(OpRequest::IdentifyFormat { input })?,
+                out.as_deref(),
+            )?;
         }
 
-        Commands::ViewConfig { input } => {
-            report(ssl_toolbox_ops::run(OpRequest::LoadConfig { path: input })?);
+        Commands::ViewConfig { input, out } => {
+            report_saving(
+                ssl_toolbox_ops::run(OpRequest::LoadConfig { path: input })?,
+                out.as_deref(),
+            )?;
         }
 
         Commands::SaveConfig { out, from } => {
@@ -403,20 +503,30 @@ fn execute_command(cmd: Commands, debug: bool) -> Result<()> {
             )?);
         }
 
-        Commands::ViewCert { input } => {
-            report(ssl_toolbox_ops::run(OpRequest::InspectCert { input })?);
+        Commands::ViewCert { input, out } => {
+            report_saving(
+                ssl_toolbox_ops::run(OpRequest::InspectCert {
+                    input: input_source(input),
+                })?,
+                out.as_deref(),
+            )?;
         }
 
-        Commands::ViewCsr { input } => {
-            report(ssl_toolbox_ops::run(OpRequest::InspectCsr { input })?);
+        Commands::ViewCsr { input, out } => {
+            report_saving(
+                ssl_toolbox_ops::run(OpRequest::InspectCsr {
+                    input: input_source(input),
+                })?,
+                out.as_deref(),
+            )?;
         }
 
-        Commands::ViewPfx { input } => {
+        Commands::ViewPfx { input, out } => {
             let password = prompt_new_password("Enter PFX password")?;
-            report(ssl_toolbox_ops::run(OpRequest::InspectPfx {
-                input,
-                password,
-            })?);
+            report_saving(
+                ssl_toolbox_ops::run(OpRequest::InspectPfx { input, password })?,
+                out.as_deref(),
+            )?;
         }
 
         Commands::VerifyHttps {
@@ -635,10 +745,62 @@ fn verify(
     Ok(())
 }
 
-/// Render the outcome of a non-verification operation.
+/// Validate `--format` while clap is still parsing arguments.
+///
+/// Ops validates the format too, for the GUI's benefit — but by the time a
+/// request reaches ops the CLI has already run its credential pre-flight, so a
+/// typo would surface as "no credentials configured" and send the operator to
+/// fix something unrelated. Rejecting it here keeps the error about the typo.
+fn parse_collect_format(value: &str) -> Result<String, String> {
+    match ssl_toolbox_ops::CollectFormat::parse(value) {
+        Some(format) => Ok(format.token().to_string()),
+        None => Err(format!(
+            "unknown format '{value}'. Use one of: {}",
+            ssl_toolbox_ops::CollectFormat::ALL
+                .map(|format| format.token())
+                .join(", ")
+        )),
+    }
+}
+
+/// Treat a CLI `--input` as a file path.
+///
+/// The desktop app can also hand ops pasted text; the terminal has a better
+/// answer for that already — shell redirection into a file — so the CLI stays
+/// path-only rather than growing a flag that competes with `<`.
+fn input_source(path: String) -> ssl_toolbox_ops::ops::InputSource {
+    ssl_toolbox_ops::ops::InputSource::Path { path }
+}
+
+/// Print the outcome of a non-verification operation.
 fn report(result: OpResult) {
-    match result.outcome {
-        OpOutcome::KeyCreated { path } => println!("Success: Generated {path}"),
+    print!("{}", render_outcome(result.outcome));
+}
+
+/// Print an outcome and, when `out` is given, save the same text to a file.
+///
+/// Every command that renders a report takes `--out`, so a result can be
+/// attached to a ticket or kept as evidence without the operator re-running it
+/// under `tee`. The file receives exactly what the terminal received: a second,
+/// prettier format would be a second thing to keep correct.
+fn report_saving(result: OpResult, out: Option<&str>) -> Result<()> {
+    let rendered = render_outcome(result.outcome);
+    print!("{rendered}");
+    if let Some(path) = out {
+        std::fs::write(path, &rendered)
+            .with_context(|| format!("Failed to write output to {path}"))?;
+        println!("Saved output to {path}");
+    }
+    Ok(())
+}
+
+/// Render the outcome of a non-verification operation as text.
+///
+/// Returning a string rather than printing is what makes `--out` possible at
+/// all; `report` is the thin printing wrapper over it.
+fn render_outcome(outcome: OpOutcome) -> String {
+    match outcome {
+        OpOutcome::KeyCreated { path } => format!("Success: Generated {path}\n"),
         OpOutcome::CsrGenerated {
             csr_path,
             key_path,
@@ -646,95 +808,372 @@ fn report(result: OpResult) {
             ..
         } => {
             if key_created {
-                println!("Success: Generated {key_path} and {csr_path}");
+                format!("Success: Generated {key_path} and {csr_path}\n")
             } else {
-                println!("Success: Generated {csr_path}");
+                format!("Success: Generated {csr_path}\n")
             }
         }
         OpOutcome::PfxCreated { path, legacy } => {
             if legacy {
-                println!("Success: Legacy PFX (TripleDES-SHA1) created at {path}");
+                format!("Success: Legacy PFX (TripleDES-SHA1) created at {path}\n")
             } else {
-                println!("Success: PFX created at {path}");
+                format!("Success: PFX created at {path}\n")
             }
         }
         OpOutcome::ConfigWritten { path } => {
-            println!("Success: OpenSSL config written to {path}")
+            format!("Success: OpenSSL config written to {path}\n")
         }
         OpOutcome::ConfigLoaded {
             path,
             text,
             summary,
-        } => {
-            println!("{text}");
-            print!("{}", display::render_config_summary(&summary, &path));
-        }
+        } => format!(
+            "{text}\n{}",
+            display::render_config_summary(&summary, &path)
+        ),
         OpOutcome::ConfigSaved {
             path,
             backup,
             summary,
         } => {
+            let mut rendered = String::new();
             if let Some(backup) = &backup {
-                println!("Previous contents saved to {backup}");
+                rendered.push_str(&format!("Previous contents saved to {backup}\n"));
             }
-            println!("Success: OpenSSL config written to {path}");
-            print!("{}", display::render_config_summary(&summary, &path));
+            rendered.push_str(&format!("Success: OpenSSL config written to {path}\n"));
+            rendered.push_str(&display::render_config_summary(&summary, &path));
+            rendered
         }
         OpOutcome::CertInspected { chain, .. } => {
-            display::display_cert_details_list(&chain, "Certificate Details")
+            display::render_cert_details_list(&chain, "Certificate Details")
         }
         OpOutcome::CsrInspected {
             common_name, sans, ..
-        } => {
-            println!("\n╔═══════════════════════════════════════════════════════════════╗");
-            println!("║                        CSR Details                           ║");
-            println!("╚═══════════════════════════════════════════════════════════════╝\n");
-            println!("  CommonName: {common_name}");
-            if sans.is_empty() {
-                println!("  SANs: None");
-            } else {
-                println!("  SANs:");
-                for san in &sans {
-                    println!("    • {san}");
-                }
-            }
-            println!();
-        }
+        } => render_csr_details(&common_name, &sans),
         OpOutcome::PfxInspected { details, .. } => {
-            display::display_pfx_details(&details, "PFX Contents")
+            display::render_pfx_details(&details, "PFX Contents")
         }
         OpOutcome::FormatConverted { output, format } => {
-            println!("Success: Converted to {format}: {output}")
+            format!("Success: Converted to {format}: {output}\n")
         }
         OpOutcome::FormatIdentified {
             path, description, ..
-        } => {
-            println!("File: {path}");
-            println!("Format: {description}");
-        }
+        } => format!("File: {path}\nFormat: {description}\n"),
         OpOutcome::CaProfilesListed { provider, profiles } => {
-            println!("\nAvailable certificate profiles from {provider}:\n");
+            let mut rendered = format!("\nAvailable certificate profiles from {provider}:\n\n");
             for profile in &profiles {
-                println!("  [{}] {}", profile.id, profile.name);
+                rendered.push_str(&format!("  [{}] {}\n", profile.id, profile.name));
                 if let Some(description) = &profile.description {
-                    println!("      {description}");
+                    rendered.push_str(&format!("      {description}\n"));
                 }
                 if !profile.terms.is_empty() {
-                    println!("      Terms (days): {:?}", profile.terms);
+                    rendered.push_str(&format!("      Terms (days): {:?}\n", profile.terms));
                 }
             }
-            println!();
+            rendered.push('\n');
+            rendered
         }
-        OpOutcome::CaCsrSubmitted { request_id, path } => {
-            println!("Success: CSR submitted. Request ID {request_id} saved to {path}")
-        }
+        OpOutcome::CaCsrSubmitted { request_id, path } => match path {
+            Some(path) => {
+                format!("Success: CSR submitted. Request ID {request_id} saved to {path}\n")
+            }
+            None => format!(
+                "Success: CSR submitted. Request ID {request_id}\n\
+                 Recorded in the workspace; `ssl-toolbox ca requests` lists it again.\n"
+            ),
+        },
         OpOutcome::CaCertCollected { path, .. } => {
-            println!("Success: Certificate collected to {path}")
+            format!("Success: Certificate collected to {path}\n")
         }
+        OpOutcome::CaCertificatesFound {
+            provider,
+            certificates,
+            position,
+            may_have_more,
+        } => render_certificate_search(&provider, &certificates, position, may_have_more),
+        OpOutcome::CaCertificateLoaded { certificate, .. } => {
+            render_certificate_details(&certificate)
+        }
+        OpOutcome::CaRequestsListed { requests } => render_ca_requests(&requests),
+        OpOutcome::CaSettingsLoaded(view) => render_ca_settings(&view),
+        OpOutcome::CaSettingsSaved { path, shadowed_by } => {
+            let mut rendered = format!("Success: CA settings saved to {path}\n");
+            if let Some(shadow) = shadowed_by {
+                rendered.push_str(&format!(
+                    "Warning: {shadow} is a project-scope config and overrides these values here.\n"
+                ));
+            }
+            rendered
+        }
+        OpOutcome::CaCredentialsChanged { status } => render_credential_status(&status),
+        OpOutcome::CaConnectionVerified { provider, source } => format!(
+            "Success: authenticated with {provider} using credentials from {}\n",
+            describe_credential_source(source)
+        ),
         OpOutcome::EndpointVerified(_) => {
             unreachable!("endpoint verification is rendered by `verify`")
         }
     }
+}
+
+fn render_csr_details(common_name: &str, sans: &[String]) -> String {
+    let mut rendered = String::new();
+    rendered.push_str("\n╔═══════════════════════════════════════════════════════════════╗\n");
+    rendered.push_str("║                        CSR Details                           ║\n");
+    rendered.push_str("╚═══════════════════════════════════════════════════════════════╝\n\n");
+    rendered.push_str(&format!("  CommonName: {common_name}\n"));
+    if sans.is_empty() {
+        rendered.push_str("  SANs: None\n");
+    } else {
+        rendered.push_str("  SANs:\n");
+        for san in sans {
+            rendered.push_str(&format!("    • {san}\n"));
+        }
+    }
+    rendered.push('\n');
+    rendered
+}
+
+fn describe_credential_source(source: credentials::CredentialSource) -> &'static str {
+    match source {
+        credentials::CredentialSource::Environment => "environment variables",
+        credentials::CredentialSource::Vault => "the credential vault",
+    }
+}
+
+fn render_ca_settings(view: &ssl_toolbox_ops::ops::CaSettingsView) -> String {
+    let mut out = String::from("\n");
+    match &view.provider {
+        Some(provider) => out.push_str(&format!("CA provider:   {provider}\n")),
+        None => out.push_str("CA provider:   none (built without a CA plugin)\n"),
+    }
+    out.push_str(&format!("API base:      {}\n", or_unset(&view.api_base)));
+    out.push_str(&format!("Organisation:  {}\n", or_unset(&view.org_id)));
+    out.push_str(&format!(
+        "Product code:  {}\n",
+        or_unset(&view.product_code)
+    ));
+    out.push_str(&format!("Token URL:     {}\n", or_unset(&view.token_url)));
+    if let Some(path) = &view.config_path {
+        out.push_str(&format!("Settings file: {path}\n"));
+    }
+    if let Some(shadow) = &view.shadowed_by {
+        out.push_str(&format!("Overridden by: {shadow} (project scope)\n"));
+    }
+    if !view.environment_overrides.is_empty() {
+        out.push_str(&format!(
+            "Env overrides: {} (these win over the settings file)\n",
+            view.environment_overrides.join(", ")
+        ));
+    }
+    out.push('\n');
+    out.push_str(&render_credential_status(&view.credentials));
+    out
+}
+
+fn or_unset(value: &str) -> &str {
+    if value.is_empty() { "(not set)" } else { value }
+}
+
+fn render_certificate_search(
+    provider: &str,
+    certificates: &[ssl_toolbox_ops::CertificateSummary],
+    position: u32,
+    may_have_more: bool,
+) -> String {
+    if certificates.is_empty() {
+        return format!("\nNo certificates at {provider} matched.\n\n");
+    }
+
+    let mut out = format!(
+        "\n{} certificate(s) from {provider}, starting at {position}:\n\n",
+        certificates.len()
+    );
+    for certificate in certificates {
+        out.push_str(&format!(
+            "  [{}] {}\n",
+            certificate.id, certificate.common_name
+        ));
+        // Status and validity decide whether a row is the certificate being
+        // looked for, so they sit directly under the name rather than behind a
+        // second command.
+        let mut facts: Vec<String> = Vec::new();
+        if let Some(status) = &certificate.status {
+            facts.push(format!("Status: {status}"));
+        }
+        if let Some(requested) = &certificate.requested {
+            facts.push(format!("Requested: {requested}"));
+        }
+        if let Some(expires) = &certificate.expires {
+            facts.push(format!("Expires: {expires}"));
+        }
+        if !facts.is_empty() {
+            out.push_str(&format!("      {}\n", facts.join("   ")));
+        }
+        if !certificate.serial_number.is_empty() {
+            out.push_str(&format!("      Serial: {}\n", certificate.serial_number));
+        }
+        for san in &certificate.subject_alternative_names {
+            out.push_str(&format!("      SAN:    {san}\n"));
+        }
+    }
+    if may_have_more {
+        // The API reports no total, so a full page means "maybe more", never
+        // "definitely more" — say which of the two this is.
+        out.push_str(&format!(
+            "\nThe page came back full; there may be more. Re-run with --position {}.\n",
+            position + certificates.len() as u32
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+fn render_certificate_details(certificate: &ssl_toolbox_ops::CertificateDetails) -> String {
+    let mut out = format!("\nCertificate {}\n\n", certificate.id);
+    let mut row = |label: &str, value: &str| {
+        if !value.is_empty() {
+            out.push_str(&format!("  {label:<14}{value}\n"));
+        }
+    };
+    row("Common name:", &certificate.common_name);
+    row("Serial:", &certificate.serial_number);
+    row("Status:", certificate.status.as_deref().unwrap_or_default());
+    row(
+        "Profile:",
+        certificate.profile.as_deref().unwrap_or_default(),
+    );
+    row(
+        "Term:",
+        &certificate
+            .term_days
+            .map(|days| format!("{days} days"))
+            .unwrap_or_default(),
+    );
+    row(
+        "Requested:",
+        certificate.requested.as_deref().unwrap_or_default(),
+    );
+    row(
+        "Expires:",
+        certificate.expires.as_deref().unwrap_or_default(),
+    );
+    row(
+        "Requester:",
+        certificate.requester.as_deref().unwrap_or_default(),
+    );
+    row(
+        "Key:",
+        certificate.key_algorithm.as_deref().unwrap_or_default(),
+    );
+    row(
+        "Comments:",
+        certificate.comments.as_deref().unwrap_or_default(),
+    );
+
+    if !certificate.subject_alternative_names.is_empty() {
+        out.push_str("  SANs:\n");
+        for san in &certificate.subject_alternative_names {
+            out.push_str(&format!("    • {san}\n"));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+/// Past CA submissions, newest first.
+///
+/// The desktop app offers these as a dropdown on its collect screen; the CLI
+/// has no dropdown, so it gets the same list as text — otherwise an operator who
+/// submitted from the app could not find the ID from the terminal.
+fn render_ca_requests(requests: &[ssl_toolbox_ops::workflow::CaRequestRecord]) -> String {
+    if requests.is_empty() {
+        return "No CA submissions recorded yet.\n".to_string();
+    }
+
+    let mut out = String::from("\nRecorded CA submissions (newest first):\n\n");
+    for record in requests {
+        out.push_str(&format!("  {}\n", record.request_id));
+        if !record.common_name.is_empty() {
+            out.push_str(&format!("      Subject:     {}\n", record.common_name));
+        }
+        if !record.description.is_empty() {
+            out.push_str(&format!("      Description: {}\n", record.description));
+        }
+        if !record.profile.is_empty() {
+            out.push_str(&format!("      Profile:     {}\n", record.profile));
+        }
+        if !record.csr_path.is_empty() {
+            out.push_str(&format!("      CSR:         {}\n", record.csr_path));
+        }
+        out.push_str(&format!(
+            "      Submitted:   {}\n",
+            audit::format_timestamp_utc(record.timestamp_secs)
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// Report the credential situation without printing the credential.
+///
+/// Only the client ID's length is shown — ARCHITECTURE.md §11.3 rule 1 keeps
+/// the value itself off stdout even under `--debug`.
+fn render_credential_status(status: &credentials::CredentialStatus) -> String {
+    let mut out = String::new();
+
+    if let Some(problem) = &status.problem {
+        out.push_str(&format!("Credentials:   unusable — {problem}\n"));
+        if let Some(path) = &status.vault_path {
+            out.push_str(&format!(
+                "Vault:         {path}{}\n",
+                if status.vault_present {
+                    " (present, but the environment override takes precedence)"
+                } else {
+                    " (not created)"
+                }
+            ));
+        }
+        return out;
+    }
+
+    match status.active_source {
+        Some(source) => {
+            out.push_str(&format!(
+                "Credentials:   in use, from {}\n",
+                describe_credential_source(source)
+            ));
+            if let Some(length) = status.client_id_length {
+                out.push_str(&format!(
+                    "Client ID:     {length} characters (value withheld)\n"
+                ));
+            }
+        }
+        None if status.vault_present => {
+            out.push_str("Credentials:   stored but locked — unlock with the vault passphrase\n");
+        }
+        None => {
+            out.push_str("Credentials:   none configured — run `ssl-toolbox ca login`\n");
+        }
+    }
+
+    if status.environment_override && status.vault_present {
+        out.push_str(
+            "Note:          SCM_CLIENT_ID / SCM_CLIENT_SECRET are set and take precedence over the vault.\n",
+        );
+    }
+    if let Some(path) = &status.vault_path {
+        out.push_str(&format!(
+            "Vault:         {path}{}\n",
+            if status.vault_present {
+                ""
+            } else {
+                " (not created)"
+            }
+        ));
+    }
+
+    out
 }
 
 fn prompt_new_password(label: &str) -> Result<Secret> {
@@ -857,19 +1296,94 @@ fn print_config_summary(inputs: &ConfigInputs, output_path: &str) {
 }
 
 fn execute_ca_command(cmd: CaCommands, debug: bool) -> Result<()> {
+    // Handled before the shared path below: these three collect a secret or
+    // edit configuration rather than reaching the CA, so they must not trigger
+    // the unlock prompt that a CA call needs.
+    match cmd {
+        CaCommands::Login { client_id } => return ca_login(client_id),
+        CaCommands::Logout => {
+            report(ssl_toolbox_ops::run(OpRequest::CaClearCredentials)?);
+            return Ok(());
+        }
+        CaCommands::Configure {
+            api_base,
+            org_id,
+            product_code,
+            token_url,
+        } => return ca_configure(api_base, org_id, product_code, token_url),
+        CaCommands::Settings { out } => {
+            return report_saving(
+                ssl_toolbox_ops::run(OpRequest::CaLoadSettings)?,
+                out.as_deref(),
+            );
+        }
+        // Reads the local workspace, not the CA — no credentials needed.
+        CaCommands::Requests { out } => {
+            return report_saving(
+                ssl_toolbox_ops::run(OpRequest::CaListRequests)?,
+                out.as_deref(),
+            );
+        }
+        _ => {}
+    }
+
+    // Every remaining command talks to the CA, so it needs credentials in hand.
+    // A CLI process starts locked; prompting here is the terminal's equivalent
+    // of the desktop app's unlock dialog.
+    ensure_ca_credentials()?;
+
+    // `--out` on a CA read means "save the report"; on submit and collect it
+    // names the artifact the operation produces, so only the reads route
+    // through `report_saving`.
+    let mut save_report_to: Option<String> = None;
     let request = match cmd {
-        CaCommands::ListProfiles => OpRequest::CaListProfiles { debug },
+        CaCommands::ListProfiles { out } => {
+            save_report_to = out;
+            OpRequest::CaListProfiles { debug }
+        }
+        CaCommands::Search {
+            common_name,
+            san,
+            serial,
+            status,
+            profile_id,
+            size,
+            position,
+            no_dates,
+            out,
+        } => {
+            save_report_to = out;
+            OpRequest::CaSearchCertificates {
+                common_name,
+                subject_alternative_name: san,
+                serial_number: serial,
+                status,
+                profile_id,
+                size,
+                position,
+                include_dates: !no_dates,
+                debug,
+            }
+        }
+        CaCommands::Show { id, out } => {
+            save_report_to = out;
+            OpRequest::CaCertificateDetails {
+                certificate_id: id,
+                debug,
+            }
+        }
         CaCommands::Submit {
             csr,
             out,
             description,
             product_code,
+            term_days,
         } => OpRequest::CaSubmitCsr {
             csr,
             out,
             description,
             product_code,
-            term_days: None,
+            term_days,
             debug,
         },
         CaCommands::Collect { id, out, format } => OpRequest::CaCollectCert {
@@ -878,9 +1392,91 @@ fn execute_ca_command(cmd: CaCommands, debug: bool) -> Result<()> {
             format,
             debug,
         },
+        CaCommands::TestConnection => OpRequest::CaTestConnection { debug },
+        CaCommands::Login { .. }
+        | CaCommands::Logout
+        | CaCommands::Configure { .. }
+        | CaCommands::Requests { .. }
+        | CaCommands::Settings { .. } => unreachable!("handled above"),
     };
 
-    report(ssl_toolbox_ops::run(request)?);
+    report_saving(ssl_toolbox_ops::run(request)?, save_report_to.as_deref())
+}
+
+/// Make credentials available for a CA call, prompting to unlock if needed.
+///
+/// The four cases come from `credentials::availability` rather than being
+/// re-derived here. An earlier version inspected the individual status flags and
+/// collapsed a half-set environment override into "nothing configured", which
+/// pointed the operator at `ca login` when the actual fix was to export the
+/// second variable.
+fn ensure_ca_credentials() -> Result<()> {
+    match credentials::availability() {
+        credentials::Availability::Ready(..) => Ok(()),
+        credentials::Availability::Misconfigured(reason) => anyhow::bail!(reason),
+        credentials::Availability::Missing => anyhow::bail!(
+            "No CA credentials configured. Run `ssl-toolbox ca login`, or set SCM_CLIENT_ID and SCM_CLIENT_SECRET."
+        ),
+        credentials::Availability::Locked => {
+            let passphrase = prompt_new_password("Vault passphrase")?;
+            report(ssl_toolbox_ops::run(OpRequest::CaUnlockCredentials {
+                vault_passphrase: passphrase,
+            })?);
+            Ok(())
+        }
+    }
+}
+
+fn ca_login(client_id: Option<String>) -> Result<()> {
+    let client_id = match client_id {
+        Some(value) => value,
+        None => input("Client ID").interact()?,
+    };
+    let client_secret = prompt_new_password("Client secret")?;
+
+    // Confirm the passphrase: it is the only key to the vault, and a typo here
+    // is not recoverable — it produces a file nobody can open.
+    let vault_passphrase =
+        prompt_new_password("Vault passphrase (encrypts the stored credentials)")?;
+    let confirm = prompt_new_password("Confirm vault passphrase")?;
+    if vault_passphrase.expose() != confirm.expose() {
+        anyhow::bail!("Vault passphrases do not match");
+    }
+
+    report(ssl_toolbox_ops::run(OpRequest::CaStoreCredentials {
+        client_id,
+        client_secret,
+        vault_passphrase,
+    })?);
+    Ok(())
+}
+
+/// Update CA endpoint settings, leaving unspecified fields as they are.
+fn ca_configure(
+    api_base: Option<String>,
+    org_id: Option<String>,
+    product_code: Option<String>,
+    token_url: Option<String>,
+) -> Result<()> {
+    if api_base.is_none() && org_id.is_none() && product_code.is_none() && token_url.is_none() {
+        anyhow::bail!(
+            "Nothing to change. Pass at least one of --api-base, --org-id, --product-code, --token-url."
+        );
+    }
+
+    // Read-modify-write: the op writes the whole file, so omitted flags must
+    // carry the current values forward rather than blanking them.
+    let current = ssl_toolbox_ops::run(OpRequest::CaLoadSettings)?;
+    let OpOutcome::CaSettingsLoaded(view) = current.outcome else {
+        anyhow::bail!("Could not read the current CA settings");
+    };
+
+    report(ssl_toolbox_ops::run(OpRequest::CaSaveSettings {
+        api_base: api_base.unwrap_or(view.api_base),
+        org_id: org_id.unwrap_or(view.org_id),
+        product_code: product_code.unwrap_or(view.product_code),
+        token_url: token_url.unwrap_or(view.token_url),
+    })?);
     Ok(())
 }
 
@@ -968,6 +1564,64 @@ mod tests {
         ValidationAuditEntry, ValidationAuditStatus, ValidationComparison,
     };
     use ssl_toolbox_ops::workflow::ActionKind;
+
+    /// Parity is an architectural contract (ARCHITECTURE.md §10.6): if the
+    /// desktop app can store CA credentials and the CLI cannot, the two
+    /// front-ends have already drifted. This pins the CLI half of that surface.
+    #[test]
+    fn the_cli_can_manage_ca_credentials_and_settings() {
+        let cli = Cli::try_parse_from(["ssl-toolbox", "ca", "login", "--client-id", "svc-client"])
+            .expect("parsed cli");
+        match cli.command {
+            Commands::Ca(CaCommands::Login { client_id }) => {
+                assert_eq!(client_id.as_deref(), Some("svc-client"));
+            }
+            _ => panic!("unexpected command"),
+        }
+
+        // No --client-secret flag exists on purpose: a secret passed as an
+        // argument lands in the shell history and in `ps` output. It is
+        // prompted for instead.
+        assert!(
+            Cli::try_parse_from(["ssl-toolbox", "ca", "login", "--client-secret", "s3cret"])
+                .is_err(),
+            "a client secret must never be accepted as a command-line argument"
+        );
+
+        let cli = Cli::try_parse_from([
+            "ssl-toolbox",
+            "ca",
+            "configure",
+            "--org-id",
+            "12345",
+            "--token-url",
+            "https://idp.example.test/token",
+        ])
+        .expect("parsed cli");
+        match cli.command {
+            Commands::Ca(CaCommands::Configure {
+                api_base,
+                org_id,
+                product_code,
+                token_url,
+            }) => {
+                assert_eq!(org_id.as_deref(), Some("12345"));
+                assert_eq!(token_url.as_deref(), Some("https://idp.example.test/token"));
+                assert_eq!(api_base, None, "omitted fields must stay unset, not blank");
+                assert_eq!(product_code, None);
+            }
+            _ => panic!("unexpected command"),
+        }
+
+        for (args, expected) in [
+            (["ca", "logout"], "logout"),
+            (["ca", "settings"], "settings"),
+            (["ca", "test-connection"], "test-connection"),
+        ] {
+            Cli::try_parse_from(["ssl-toolbox", args[0], args[1]])
+                .unwrap_or_else(|error| panic!("`ca {expected}` must parse: {error}"));
+        }
+    }
 
     #[test]
     fn verify_https_accepts_out_flag() {

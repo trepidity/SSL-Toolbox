@@ -22,10 +22,56 @@ use ssl_toolbox_core::{
 };
 
 use crate::audit::{self, ValidationAuditEntry};
+use crate::credentials;
 use crate::endpoint::{self, EndpointProtocol};
 use crate::secret::Secret;
 use crate::settings;
 use crate::workflow::{ActionKind, JobRecord};
+
+/// Where an inspection reads the artifact it is about to parse.
+///
+/// Certificates and CSRs reach an operator two ways: as a file, and as text in
+/// a ticket, an email, or a chat message. Modelling that as an enum rather than
+/// an optional second field keeps "both set" and "neither set" unrepresentable.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum InputSource {
+    Path {
+        path: String,
+    },
+    /// Pasted PEM, or the bare base64 body without its armour.
+    Text {
+        text: String,
+    },
+}
+
+impl InputSource {
+    fn read(&self, what: &str) -> Result<Vec<u8>> {
+        match self {
+            Self::Path { path } => {
+                std::fs::read(path).with_context(|| format!("Failed to read {what} {path}"))
+            }
+            Self::Text { text } => ssl_toolbox_core::convert::pasted_to_bytes(text)
+                .with_context(|| format!("Could not read the pasted {what}")),
+        }
+    }
+
+    /// How this input should be named in a job record or a result panel.
+    fn label(&self) -> String {
+        match self {
+            Self::Path { path } => path.clone(),
+            Self::Text { .. } => "(pasted)".to_string(),
+        }
+    }
+
+    /// The path, when there is one — workflow memory only tracks real files.
+    fn path(&self) -> Option<&str> {
+        match self {
+            Self::Path { path } => Some(path),
+            Self::Text { .. } => None,
+        }
+    }
+}
 
 /// Optional LDAP RootDSE probe that runs after an LDAPS handshake succeeds.
 #[derive(Debug, Deserialize)]
@@ -117,10 +163,10 @@ pub enum OpRequest {
     SaveConfig { path: String, text: String },
 
     #[serde(rename_all = "camelCase")]
-    InspectCert { input: String },
+    InspectCert { input: InputSource },
 
     #[serde(rename_all = "camelCase")]
-    InspectCsr { input: String },
+    InspectCsr { input: InputSource },
 
     #[serde(rename_all = "camelCase")]
     InspectPfx { input: String, password: Secret },
@@ -165,8 +211,9 @@ pub enum OpRequest {
     #[serde(rename_all = "camelCase")]
     CaSubmitCsr {
         csr: String,
-        /// File to write the returned request ID into.
-        out: String,
+        /// File to write the returned request ID into. Optional — the ID is
+        /// remembered in the workspace either way.
+        out: Option<String>,
         description: Option<String>,
         product_code: Option<String>,
         term_days: Option<i32>,
@@ -181,6 +228,79 @@ pub enum OpRequest {
         out: String,
         /// `pem`, `chain`, or `pkcs7`.
         format: String,
+        #[serde(default)]
+        debug: bool,
+    },
+
+    /// Find already-issued certificates at the CA.
+    #[serde(rename_all = "camelCase")]
+    CaSearchCertificates {
+        common_name: Option<String>,
+        subject_alternative_name: Option<String>,
+        serial_number: Option<String>,
+        status: Option<String>,
+        profile_id: Option<String>,
+        size: Option<u32>,
+        position: Option<u32>,
+        /// Fill in status and dates per row. Defaults to on; costs one extra
+        /// request per result when the CA's list response omits them.
+        #[serde(default = "default_true")]
+        include_dates: bool,
+        #[serde(default)]
+        debug: bool,
+    },
+
+    /// Full record for one certificate found by a search.
+    #[serde(rename_all = "camelCase")]
+    CaCertificateDetails {
+        certificate_id: String,
+        #[serde(default)]
+        debug: bool,
+    },
+
+    /// List CSRs previously submitted to a CA, newest first.
+    CaListRequests,
+
+    /// Read the CA endpoint settings and describe the credential situation.
+    ///
+    /// Returns no secret and no client ID — see [`crate::credentials::CredentialStatus`].
+    CaLoadSettings,
+
+    /// Write the CA endpoint settings to user scope.
+    ///
+    /// Endpoint settings only. Credentials go through [`OpRequest::CaStoreCredentials`],
+    /// which is the boundary that keeps ARCHITECTURE.md §11.3 rule 2 true: no
+    /// path exists from this variant to a secret in a `*.json` file.
+    #[serde(rename_all = "camelCase")]
+    CaSaveSettings {
+        api_base: String,
+        org_id: String,
+        product_code: String,
+        token_url: String,
+    },
+
+    /// Seal a client ID and secret into the encrypted credential vault.
+    #[serde(rename_all = "camelCase")]
+    CaStoreCredentials {
+        client_id: String,
+        client_secret: Secret,
+        /// Encrypts the vault. Required — there is no unprotected vault.
+        vault_passphrase: Secret,
+    },
+
+    /// Open the credential vault for the life of this process.
+    #[serde(rename_all = "camelCase")]
+    CaUnlockCredentials { vault_passphrase: Secret },
+
+    /// Forget the unlocked credentials. The vault file is left alone.
+    CaLockCredentials,
+
+    /// Delete the credential vault.
+    CaClearCredentials,
+
+    /// Authenticate against the CA without performing an operation.
+    #[serde(rename_all = "camelCase")]
+    CaTestConnection {
         #[serde(default)]
         debug: bool,
     },
@@ -240,6 +360,9 @@ pub enum OpOutcome {
         path: String,
         common_name: String,
         sans: Vec<String>,
+        /// The request re-emitted as PEM, so it can be copied straight out of
+        /// the result panel regardless of how it was supplied.
+        pem: String,
     },
 
     #[serde(rename_all = "camelCase")]
@@ -265,10 +388,83 @@ pub enum OpOutcome {
     },
 
     #[serde(rename_all = "camelCase")]
-    CaCsrSubmitted { request_id: String, path: String },
+    CaCsrSubmitted {
+        request_id: String,
+        /// Where the ID was also written, when a file was asked for.
+        path: Option<String>,
+    },
 
     #[serde(rename_all = "camelCase")]
     CaCertCollected { path: String, format: String },
+
+    #[serde(rename_all = "camelCase")]
+    CaCertificatesFound {
+        provider: String,
+        certificates: Vec<ssl_toolbox_ca::CertificateSummary>,
+        /// Offset of this page, so a front-end can page without re-deriving it.
+        position: u32,
+        /// True when the page came back full, meaning more may follow. The API
+        /// reports no total, so "more" cannot be known, only suspected.
+        may_have_more: bool,
+    },
+
+    #[serde(rename_all = "camelCase")]
+    CaCertificateLoaded {
+        provider: String,
+        certificate: Box<ssl_toolbox_ca::CertificateDetails>,
+    },
+
+    #[serde(rename_all = "camelCase")]
+    CaRequestsListed {
+        requests: Vec<crate::workflow::CaRequestRecord>,
+    },
+
+    #[serde(rename_all = "camelCase")]
+    CaSettingsLoaded(Box<CaSettingsView>),
+
+    #[serde(rename_all = "camelCase")]
+    CaSettingsSaved {
+        path: String,
+        /// A project-scope config file that will override what was just saved.
+        /// Present means the save is correct but will not take effect here.
+        shadowed_by: Option<String>,
+    },
+
+    /// Returned by every credential mutation, carrying the state that resulted.
+    #[serde(rename_all = "camelCase")]
+    CaCredentialsChanged {
+        status: crate::credentials::CredentialStatus,
+    },
+
+    #[serde(rename_all = "camelCase")]
+    CaConnectionVerified {
+        provider: String,
+        source: crate::credentials::CredentialSource,
+    },
+}
+
+/// CA configuration as a settings screen needs to see it.
+///
+/// Endpoint settings are returned in full; credentials are described, never
+/// returned. The `Secret` type physically cannot serialize, and the client ID is
+/// withheld by policy (ARCHITECTURE.md §11.3 rule 1).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaSettingsView {
+    /// Empty when no CA plugin is compiled into this build.
+    pub provider: Option<String>,
+    pub api_base: String,
+    pub org_id: String,
+    pub product_code: String,
+    pub token_url: String,
+    /// Where a save would write.
+    pub config_path: Option<String>,
+    /// A project-scope file currently overriding user scope, if any.
+    pub shadowed_by: Option<String>,
+    /// Which endpoint settings are currently being supplied by environment
+    /// variables, and would therefore ignore anything saved here.
+    pub environment_overrides: Vec<String>,
+    pub credentials: crate::credentials::CredentialStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -509,27 +705,36 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
         }
 
         OpRequest::InspectCert { input } => {
-            let content = std::fs::read(&input)
-                .with_context(|| format!("Failed to read certificate {input}"))?;
+            let content = input.read("certificate")?;
             let chain = ssl_toolbox_core::x509_utils::extract_cert_chain_details(&content)?;
+            let label = input.label();
+            let mut record = job(ActionKind::ViewCert, format!("View cert {label}"));
+            if let Some(path) = input.path() {
+                record = record.input("cert", path);
+            }
             Ok(OpResult {
-                job: job(ActionKind::ViewCert, format!("View cert {input}"))
-                    .input("cert", &input)
-                    .build(),
-                outcome: OpOutcome::CertInspected { path: input, chain },
+                job: record.build(),
+                outcome: OpOutcome::CertInspected { path: label, chain },
             })
         }
 
         OpRequest::InspectCsr { input } => {
-            let (common_name, sans) = ssl_toolbox_core::key_csr::extract_csr_details(&input)?;
+            let content = input.read("CSR")?;
+            let (common_name, sans) =
+                ssl_toolbox_core::key_csr::extract_csr_details_from_bytes(&content)?;
+            let pem = ssl_toolbox_core::key_csr::csr_to_pem_text(&content)?;
+            let label = input.label();
+            let mut record = job(ActionKind::ViewCsr, format!("View CSR {label}"));
+            if let Some(path) = input.path() {
+                record = record.input("csr", path);
+            }
             Ok(OpResult {
-                job: job(ActionKind::ViewCsr, format!("View CSR {input}"))
-                    .input("csr", &input)
-                    .build(),
+                job: record.build(),
                 outcome: OpOutcome::CsrInspected {
-                    path: input,
+                    path: label,
                     common_name,
                     sans,
+                    pem,
                 },
             })
         }
@@ -626,22 +831,38 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
             let csr_pem = std::fs::read_to_string(&csr)
                 .with_context(|| format!("Failed to read CSR {csr}"))?;
             let options = ssl_toolbox_ca::SubmitOptions {
-                description,
-                product_code,
+                description: description.clone(),
+                product_code: product_code.clone(),
                 term_days,
             };
             let request_id = plugin.submit_csr(&csr_pem, &options, debug)?;
-            std::fs::write(&out, &request_id)
-                .with_context(|| format!("Failed to write request ID to {out}"))?;
+
+            // Writing the ID to a file is optional now that submissions are
+            // remembered: the desktop app has nowhere natural to put a file,
+            // and losing the ID means hunting through the CA console.
+            let written_to = match out.as_deref() {
+                Some(path) if !path.is_empty() => {
+                    std::fs::write(path, &request_id)
+                        .with_context(|| format!("Failed to write request ID to {path}"))?;
+                    Some(path.to_string())
+                }
+                _ => None,
+            };
+
+            remember_ca_request(&request_id, &csr, &csr_pem, description, product_code);
+
+            let mut record = job(ActionKind::CaSubmit, format!("Submit CSR {csr}"))
+                .input("csr", &csr)
+                .replay("ca_request_id", &request_id);
+            if let Some(path) = written_to.as_deref() {
+                record = record.output("ca_request_id", path);
+            }
 
             Ok(OpResult {
-                job: job(ActionKind::CaSubmit, format!("Submit CSR {csr}"))
-                    .input("csr", &csr)
-                    .output("ca_request_id", &out)
-                    .build(),
+                job: record.build(),
                 outcome: OpOutcome::CaCsrSubmitted {
                     request_id,
-                    path: out,
+                    path: written_to,
                 },
             })
         }
@@ -652,21 +873,22 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
             format,
             debug,
         } => {
-            let normalized = format.to_lowercase();
-            let collect_format = match normalized.as_str() {
-                "pem" => ssl_toolbox_ca::CollectFormat::PemCert,
-                "chain" => ssl_toolbox_ca::CollectFormat::PemChain,
-                "pkcs7" => ssl_toolbox_ca::CollectFormat::Pkcs7,
-                other => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported collect format: '{other}'. Use: pem, chain, pkcs7"
-                    ));
-                }
-            };
+            let collect_format =
+                ssl_toolbox_ca::CollectFormat::parse(&format).ok_or_else(|| {
+                    let supported = ssl_toolbox_ca::CollectFormat::ALL
+                        .map(|value| value.token())
+                        .join(", ");
+                    anyhow::anyhow!(
+                        "Unsupported collect format: '{format}'. Use one of: {supported}"
+                    )
+                })?;
+            let normalized = collect_format.token().to_string();
 
             let plugin = ca_plugin(debug)?;
             let certificate = plugin.collect_cert(&request_id, collect_format, debug)?;
-            std::fs::write(&out, certificate)
+            // Written as bytes: one of the formats is DER, and re-encoding it
+            // through a String would corrupt it.
+            std::fs::write(&out, &certificate)
                 .with_context(|| format!("Failed to write certificate to {out}"))?;
 
             Ok(OpResult {
@@ -677,7 +899,7 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
                 .replay("request_id", &request_id)
                 .replay("format", &normalized)
                 .output(
-                    if normalized == "chain" {
+                    if collect_format == ssl_toolbox_ca::CollectFormat::CertificateChainPem {
                         "chain"
                     } else {
                         "cert"
@@ -688,6 +910,182 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
                 outcome: OpOutcome::CaCertCollected {
                     path: out,
                     format: normalized,
+                },
+            })
+        }
+
+        OpRequest::CaSearchCertificates {
+            common_name,
+            subject_alternative_name,
+            serial_number,
+            status,
+            profile_id,
+            size,
+            position,
+            include_dates,
+            debug,
+        } => {
+            let filter = ssl_toolbox_ca::CertificateFilter {
+                common_name,
+                subject_alternative_name,
+                serial_number,
+                status,
+                profile_id,
+                size,
+                position,
+                include_dates,
+            };
+            let requested = filter.size.unwrap_or(25);
+            let offset = filter.position.unwrap_or(0);
+
+            let plugin = ca_plugin(debug)?;
+            let certificates = plugin.search_certificates(&filter, debug)?;
+            let may_have_more = certificates.len() as u32 >= requested;
+
+            Ok(OpResult {
+                job: job(
+                    ActionKind::CaSearch,
+                    format!("Search {} certificates", plugin.name()),
+                )
+                .transient()
+                .build(),
+                outcome: OpOutcome::CaCertificatesFound {
+                    provider: plugin.name().to_string(),
+                    certificates,
+                    position: offset,
+                    may_have_more,
+                },
+            })
+        }
+
+        OpRequest::CaCertificateDetails {
+            certificate_id,
+            debug,
+        } => {
+            let plugin = ca_plugin(debug)?;
+            let certificate = plugin.certificate_details(&certificate_id, debug)?;
+            Ok(OpResult {
+                job: job(
+                    ActionKind::CaSearch,
+                    format!("Read certificate {certificate_id}"),
+                )
+                .transient()
+                .build(),
+                outcome: OpOutcome::CaCertificateLoaded {
+                    provider: plugin.name().to_string(),
+                    certificate: Box::new(certificate),
+                },
+            })
+        }
+
+        OpRequest::CaListRequests => {
+            let requests = settings::load_state().ca_requests;
+            Ok(OpResult {
+                job: job(ActionKind::CaSubmit, "List CA submissions")
+                    .transient()
+                    .build(),
+                outcome: OpOutcome::CaRequestsListed { requests },
+            })
+        }
+
+        OpRequest::CaLoadSettings => {
+            let view = ca_settings_view()?;
+            Ok(OpResult {
+                job: job(ActionKind::CaSettings, "Load CA settings")
+                    .transient()
+                    .build(),
+                outcome: OpOutcome::CaSettingsLoaded(Box::new(view)),
+            })
+        }
+
+        OpRequest::CaSaveSettings {
+            api_base,
+            org_id,
+            product_code,
+            token_url,
+        } => {
+            let (path, shadowed_by) =
+                ca_settings_save(&api_base, &org_id, &product_code, &token_url)?;
+            Ok(OpResult {
+                job: job(ActionKind::CaSettings, "Save CA settings")
+                    .output("ca_settings", &path)
+                    .build(),
+                outcome: OpOutcome::CaSettingsSaved { path, shadowed_by },
+            })
+        }
+
+        OpRequest::CaStoreCredentials {
+            client_id,
+            client_secret,
+            vault_passphrase,
+        } => {
+            credentials::store(&client_id, &client_secret, &vault_passphrase)?;
+            Ok(OpResult {
+                job: job(ActionKind::CaCredentials, "Store CA credentials").build(),
+                outcome: OpOutcome::CaCredentialsChanged {
+                    status: credentials::status(),
+                },
+            })
+        }
+
+        OpRequest::CaUnlockCredentials { vault_passphrase } => {
+            credentials::unlock(&vault_passphrase)?;
+            Ok(OpResult {
+                job: job(ActionKind::CaCredentials, "Unlock CA credentials")
+                    .transient()
+                    .build(),
+                outcome: OpOutcome::CaCredentialsChanged {
+                    status: credentials::status(),
+                },
+            })
+        }
+
+        OpRequest::CaLockCredentials => {
+            credentials::lock();
+            Ok(OpResult {
+                job: job(ActionKind::CaCredentials, "Lock CA credentials")
+                    .transient()
+                    .build(),
+                outcome: OpOutcome::CaCredentialsChanged {
+                    status: credentials::status(),
+                },
+            })
+        }
+
+        OpRequest::CaClearCredentials => {
+            let removed = credentials::clear()?;
+            Ok(OpResult {
+                job: job(
+                    ActionKind::CaCredentials,
+                    if removed {
+                        "Delete CA credential vault"
+                    } else {
+                        "Delete CA credential vault (nothing stored)"
+                    },
+                )
+                .build(),
+                outcome: OpOutcome::CaCredentialsChanged {
+                    status: credentials::status(),
+                },
+            })
+        }
+
+        OpRequest::CaTestConnection { debug } => {
+            let source = credentials::status()
+                .active_source
+                .ok_or_else(|| anyhow::anyhow!("No CA credentials are available to test"))?;
+            let plugin = ca_plugin(debug)?;
+            plugin.test_auth(debug)?;
+            Ok(OpResult {
+                job: job(
+                    ActionKind::CaCredentials,
+                    format!("Test {} authentication", plugin.name()),
+                )
+                .transient()
+                .build(),
+                outcome: OpOutcome::CaConnectionVerified {
+                    provider: plugin.name().to_string(),
+                    source,
                 },
             })
         }
@@ -713,16 +1111,135 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
 /// Construct the compiled-in CA plugin.
 ///
 /// Plugin wiring lives here rather than in a front-end so the CLI and the GUI
-/// reach the same CA with the same configuration precedence
-/// (`.ssl-toolbox/<name>.json` merged with environment variables).
+/// reach the same CA with the same configuration precedence: endpoint settings
+/// from `.ssl-toolbox/<name>.json` overlaid by environment variables, and
+/// credentials resolved by [`credentials::resolve`].
 #[cfg(feature = "sectigo")]
 fn ca_plugin(debug: bool) -> Result<Box<dyn ssl_toolbox_ca::CaPlugin>> {
     let config: ssl_toolbox_ca_sectigo::SectigoConfig = settings::load_ca_config("sectigo");
-    ssl_toolbox_ca_sectigo::SectigoPlugin::configure_with_config(&config, debug)
+    let creds = credentials::resolve()?;
+    ssl_toolbox_ca_sectigo::SectigoPlugin::configure_with_config(
+        &config,
+        &creds.client_id,
+        creds.client_secret.expose(),
+        debug,
+    )
 }
 
 #[cfg(not(feature = "sectigo"))]
 fn ca_plugin(_debug: bool) -> Result<Box<dyn ssl_toolbox_ca::CaPlugin>> {
+    Err(anyhow::anyhow!(
+        "No CA plugin compiled. Build with --features sectigo"
+    ))
+}
+
+/// Record a submitted CSR so the collect step can offer the ID back later.
+///
+/// Failure to persist is swallowed for the same reason job recording is: the
+/// certificate order exists at the CA whether or not we managed to write a note
+/// about it, and turning a bookkeeping failure into a submission failure would
+/// invite the operator to submit a second time.
+fn remember_ca_request(
+    request_id: &str,
+    csr_path: &str,
+    csr_pem: &str,
+    description: Option<String>,
+    product_code: Option<String>,
+) {
+    let common_name = ssl_toolbox_core::key_csr::extract_csr_details_from_bytes(csr_pem.as_bytes())
+        .map(|(cn, _)| cn)
+        .unwrap_or_default();
+
+    let mut state = settings::load_state();
+    crate::workflow::push_ca_request(
+        &mut state.ca_requests,
+        crate::workflow::CaRequestRecord {
+            request_id: request_id.to_string(),
+            common_name,
+            description: description.unwrap_or_default(),
+            profile: product_code.unwrap_or_default(),
+            csr_path: csr_path.to_string(),
+            timestamp_secs: now_secs(),
+        },
+    );
+    let _ = settings::save_state(&state);
+}
+
+/// Endpoint settings currently coming from the environment rather than a file.
+///
+/// Surfaced so a settings screen can say "this field is being overridden" instead
+/// of letting the user edit a value that a `SECTIGO_*` variable silently wins over.
+fn environment_overrides() -> Vec<String> {
+    [
+        "SECTIGO_API_BASE",
+        "SECTIGO_ORG_ID",
+        "SECTIGO_PRODUCT_CODE",
+        "SCM_TOKEN_URL",
+    ]
+    .into_iter()
+    .filter(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+    .map(str::to_string)
+    .collect()
+}
+
+#[cfg(feature = "sectigo")]
+fn ca_settings_view() -> Result<CaSettingsView> {
+    let config: ssl_toolbox_ca_sectigo::SectigoConfig = settings::load_ca_config("sectigo");
+    Ok(CaSettingsView {
+        provider: Some("Sectigo".to_string()),
+        api_base: config.api_base,
+        org_id: config.org_id,
+        product_code: config.product_code,
+        token_url: config.token_url,
+        config_path: settings::ca_config_path("sectigo").map(|path| path.display().to_string()),
+        shadowed_by: settings::ca_config_override_path("sectigo")
+            .map(|path| path.display().to_string()),
+        environment_overrides: environment_overrides(),
+        credentials: credentials::status(),
+    })
+}
+
+#[cfg(not(feature = "sectigo"))]
+fn ca_settings_view() -> Result<CaSettingsView> {
+    Ok(CaSettingsView {
+        provider: None,
+        api_base: String::new(),
+        org_id: String::new(),
+        product_code: String::new(),
+        token_url: String::new(),
+        config_path: None,
+        shadowed_by: None,
+        environment_overrides: environment_overrides(),
+        credentials: credentials::status(),
+    })
+}
+
+#[cfg(feature = "sectigo")]
+fn ca_settings_save(
+    api_base: &str,
+    org_id: &str,
+    product_code: &str,
+    token_url: &str,
+) -> Result<(String, Option<String>)> {
+    let config = ssl_toolbox_ca_sectigo::SectigoConfig {
+        api_base: api_base.trim().to_string(),
+        org_id: org_id.trim().to_string(),
+        product_code: product_code.trim().to_string(),
+        token_url: token_url.trim().to_string(),
+    };
+    let path = settings::save_ca_config("sectigo", &config)?;
+    let shadowed_by =
+        settings::ca_config_override_path("sectigo").map(|path| path.display().to_string());
+    Ok((path.display().to_string(), shadowed_by))
+}
+
+#[cfg(not(feature = "sectigo"))]
+fn ca_settings_save(
+    _api_base: &str,
+    _org_id: &str,
+    _product_code: &str,
+    _token_url: &str,
+) -> Result<(String, Option<String>)> {
     Err(anyhow::anyhow!(
         "No CA plugin compiled. Build with --features sectigo"
     ))
@@ -843,6 +1360,7 @@ struct JobBuilder {
     inputs: BTreeMap<String, String>,
     outputs: BTreeMap<String, String>,
     replay: BTreeMap<String, String>,
+    transient: bool,
 }
 
 fn job(kind: ActionKind, summary: impl Into<String>) -> JobBuilder {
@@ -852,6 +1370,7 @@ fn job(kind: ActionKind, summary: impl Into<String>) -> JobBuilder {
         inputs: BTreeMap::new(),
         outputs: BTreeMap::new(),
         replay: BTreeMap::new(),
+        transient: false,
     }
 }
 
@@ -871,6 +1390,12 @@ impl JobBuilder {
         self
     }
 
+    /// Mark this job as a read that should not enter recent-jobs history.
+    fn transient(mut self) -> Self {
+        self.transient = true;
+        self
+    }
+
     fn build(self) -> JobRecord {
         JobRecord {
             kind: self.kind,
@@ -879,6 +1404,7 @@ impl JobBuilder {
             outputs: self.outputs,
             replay_data: self.replay,
             profile: None,
+            transient: self.transient,
             timestamp_secs: now_secs(),
         }
     }

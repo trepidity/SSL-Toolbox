@@ -1,0 +1,13 @@
+[
+  {
+    "sslId": 1234567,
+    "commonName": "svc.example.test",
+    "subjectAlternativeNames": ["svc.example.test", "svc-alt.example.test"],
+    "serialNumber": "00a1b2c3d4e5f60718"
+  },
+  {
+    "sslId": 7654321,
+    "commonName": "other.example.test",
+    "serialNumber": "00ffeeddccbbaa9988"
+  }
+]

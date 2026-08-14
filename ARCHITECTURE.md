@@ -95,6 +95,8 @@ Depends on: `anyhow`, `serde`. No HTTP, no JSON, no crypto. This crate is always
 
 ### 2.4 `ssl-toolbox-ca-sectigo` (Sectigo implementation)
 
+Handed a client ID and secret by `ssl-toolbox-ops`; it does not resolve credentials itself. See §9.1.
+
 Implements `CaPlugin` against the Sectigo Certificate Manager REST API. Depends on `reqwest` (blocking, JSON) and `dotenvy`. Compiled only when the `sectigo` feature is enabled on the CLI crate.
 
 ### 2.5 Dependency rules
@@ -140,7 +142,7 @@ Tests are owed to **behaviors**, not to functions, and are written at the highes
 | **CLI** | Invoking the built binary with subcommand + args | Exit status, stdout/stderr text, files written |
 | **GUI command layer** | Invoking a `#[tauri::command]` handler directly | Its serialized return value |
 | **On-disk artifacts** | Any op that writes | `.key` / `.csr` / `.pfx` / `.cnf` / exported `.pem` — validated with the system `openssl` where available |
-| **Persisted state** | Ops that record | `~/.ssl-toolbox/state.json`, `validation-log.jsonl` |
+| **Persisted state** | Ops that record | `~/.ssl-toolbox/state.json`, `validation-log.jsonl`, `credentials.vault` |
 | **Committed fixtures** | Chain-order and parsing behavior | `samples/*.pem` golden files |
 
 **Known seam gap — network-dependent verification.** `OpRequest::VerifyEndpoint` reaches the network through `ssl-toolbox-core`'s `tls`/`smtp`/`ldap` modules, which construct their own sockets. There is no injectable transport, so verification logic — protocol-specific scan suppression, audit-entry construction, LDAP probe error containment — cannot be exercised at L0 without a live server. This is a design finding, not a licence to unit-test around it: closing it means introducing a transport seam in `ssl-toolbox-core`. Until then, that logic is covered only by manual verification against real endpoints.
@@ -156,8 +158,13 @@ Configuration resolves through five ordered layers. **Later layers override earl
 | 1 | Compiled defaults | Binary | Empty strings for `CsrDefaults`; `api_base = "https://cert-manager.com"` for `SectigoConfig` |
 | 2 | `~/.ssl-toolbox/*.json` | User | `config.json` (CSR defaults), `sectigo.json` (CA plugin settings) |
 | 3 | `./.ssl-toolbox/*.json` | Project | Same files as user scope; project values override user values |
-| 4 | Environment variables / `.env` | Process | `SCM_CLIENT_ID`, `SCM_CLIENT_SECRET`, `SCM_TOKEN_URL`, `SECTIGO_API_BASE`, `SECTIGO_ORG_ID`, `SECTIGO_PRODUCT_CODE` |
-| 5 | CLI flags | Invocation | `--conf`, `--key`, `--out`, `--host`, `--port`, `--no-verify`, `--full-scan`, `--legacy`, etc. |
+| 4 | `~/.ssl-toolbox/credentials.vault` | User | CA client ID and client secret, encrypted. **Secrets only** — no endpoint settings |
+| 5 | Environment variables / `.env` | Process | `SCM_CLIENT_ID`, `SCM_CLIENT_SECRET`, `SCM_TOKEN_URL`, `SECTIGO_API_BASE`, `SECTIGO_ORG_ID`, `SECTIGO_PRODUCT_CODE` |
+| 6 | CLI flags | Invocation | `--conf`, `--key`, `--out`, `--host`, `--port`, `--no-verify`, `--full-scan`, `--legacy`, etc. |
+
+**Credentials specifically** resolve through two of those layers and no others: environment variables first, then the vault. There is no JSON layer for a credential and no project scope for the vault. Environment stays on top so CI jobs, containers, and jump hosts that already export `SCM_*` keep working untouched; the vault exists because a desktop app launched from Finder or the Start menu inherits no shell environment and previously had no way to authenticate at all.
+
+Resolution order lives in exactly one function, `credentials::resolve_with_source`. Both the resolver used by a CA call and the status a settings screen displays read from it, so what the UI reports and what the network call uses cannot drift apart.
 
 ### 3.1 File contracts
 
@@ -165,9 +172,15 @@ Configuration resolves through five ordered layers. **Later layers override earl
 
 **`.ssl-toolbox/sectigo.json`** — Sectigo plugin settings. Schema matches `SectigoConfig`: `api_base`, `org_id`, `product_code`, `token_url`. `api_base` defaults to `https://cert-manager.com`.
 
-**`.env`** — Secrets only. `SCM_CLIENT_ID` and `SCM_CLIENT_SECRET` are required when using any `ca` subcommand; `SCM_TOKEN_URL` is required and sourced from either env or `sectigo.json`. **Secrets must never appear in any `*.json` file.**
+**`~/.ssl-toolbox/credentials.vault`** — The CA client ID and client secret, sealed with `ssl-toolbox-core::vault` (scrypt `N=32768, r=8, p=1` → AES-256-GCM; KDF parameters authenticated as AAD so a downgrade reads as tampering). Written mode `0o600` inside a `0o700` directory. Contains a JSON envelope of base64 fields — inspectable enough to confirm it holds ciphertext, useless without the passphrase.
 
-**`~/.ssl-toolbox/state.json`** — Private runtime state (recent paths, workflow memory, recent jobs, last menu choice). Written with mode `0o600`; the enclosing directory is set to `0o700`. Unix-only enforcement; Windows relies on NTFS ACLs inherited from `%USERPROFILE%`.
+User scope only, deliberately: a project-scope vault would end up committed to a repository or shared through a working directory.
+
+**Vault passphrase.** The vault is encrypted, so something must hold the key, and on a single-user desktop the only custodian that is not itself a secret-on-disk is the user. A key derived from machine or user identifiers would be recoverable by anyone with the file and this source code — obfuscation labelled as encryption, which is worse than plaintext because it invites misplaced trust. So the passphrase is prompted for and cached for the life of the process: once per app launch in the GUI, once per invocation in the CLI. There is no recovery path if it is lost; the remedy is `ca login` again with the credentials reissued by the CA.
+
+**`.env`** — Secrets only, and now optional rather than required. `SCM_CLIENT_ID` / `SCM_CLIENT_SECRET` override the vault when both are set; setting only one is an error rather than a silent fallthrough, because a half-configured override would otherwise authenticate as a different account than the operator intended. `SCM_TOKEN_URL` is sourced from either env or `sectigo.json`. **Secrets must never appear in any `*.json` file.** Note the CLI loads `.env` via `dotenvy`; the desktop app does not and never could — see the vault rationale above.
+
+**`~/.ssl-toolbox/state.json`** — Private runtime state (recent paths, workflow memory, recent jobs, last menu choice, submitted CA request IDs). Written with mode `0o600`; the enclosing directory is set to `0o700`. Unix-only enforcement; Windows relies on NTFS ACLs inherited from `%USERPROFILE%`.
 
 ### 3.2 `init` command
 
@@ -488,13 +501,17 @@ Implementation: `ssl-toolbox-ca-sectigo/src/lib.rs`.
 OAuth 2.0 **client credentials** grant, `application/x-www-form-urlencoded`:
 
 ```
-POST $SCM_TOKEN_URL
+POST <token_url>
 grant_type=client_credentials
-client_id=$SCM_CLIENT_ID
-client_secret=$SCM_CLIENT_SECRET
+client_id=<resolved client id>
+client_secret=<resolved client secret>
 ```
 
 Response: `{ "access_token": "..." }`. The token is fetched fresh on every API call — there is no in-memory cache. Tokens never reach logs or error output; only `client_id.len()` and the token URL appear under `--debug`.
+
+`ssl-toolbox-ca-sectigo` does **not** read the environment for credentials. It is handed a client ID and secret and uses them; deciding where those come from is orchestration policy and lives in `ssl-toolbox-ops::credentials` (§2.5). That boundary is what lets the credential source change — `.env` yesterday, an encrypted vault today — without the vendor client knowing.
+
+`CaPlugin::test_auth` fetches a token and stops there. A settings screen needs to answer "are these credentials right?" without a side effect at the CA, and listing profiles cannot answer it cleanly: that call also requires a valid organisation ID, so a wrong org ID would present as a credential failure and send the operator editing the wrong field.
 
 ### 9.2 Configuration sources
 
@@ -504,10 +521,10 @@ Response: `{ "access_token": "..." }`. The token is fetched fresh on every API c
 | Organisation ID | `SECTIGO_ORG_ID` | `org_id` | Yes for submit/list |
 | Default product code | `SECTIGO_PRODUCT_CODE` | `product_code` | No |
 | Token URL | `SCM_TOKEN_URL` | `token_url` | Yes |
-| Client ID | `SCM_CLIENT_ID` | **never** | Yes |
-| Client secret | `SCM_CLIENT_SECRET` | **never** | Yes |
+| Client ID | `SCM_CLIENT_ID` | **never** — vault | Yes |
+| Client secret | `SCM_CLIENT_SECRET` | **never** — vault | Yes |
 
-Environment variables override JSON. Missing `SCM_CLIENT_ID`/`SCM_CLIENT_SECRET` aborts plugin construction. Missing `SCM_TOKEN_URL` (neither env nor JSON) aborts plugin construction.
+Environment variables override JSON, and override the vault. Plugin construction aborts when credentials resolve to nothing, with an error that distinguishes the three cases an operator can act on differently: no credentials configured, a vault present but locked, and a half-set environment override. Missing token URL (neither env nor JSON) also aborts.
 
 ### 9.3 Endpoints
 
@@ -517,16 +534,39 @@ Environment variables override JSON. Missing `SCM_CLIENT_ID`/`SCM_CLIENT_SECRET`
 | Submit CSR | `POST` | `/api/ssl/v1/enroll` | Bearer | JSON body: `{certType, csr (stripped), orgId, term}`. Response: `{sslId: i64}` |
 | Attach description | `PUT` | `/api/ssl/v1` | Bearer | JSON body: `{sslId, comments}`. Failure is warned, not fatal |
 | Collect | `GET` | `/api/ssl/v1/collect/<id>?format=<fmt>` | Bearer | Format token per table below |
+| Search | `GET` | `/api/ssl/v1?commonName=&subjectAlternativeName=&serialNumber=&status=&sslTypeId=&orgId=&size=&position=` | Bearer | Returns lean rows: `{sslId, commonName, subjectAlternativeNames?, serialNumber}` |
+| Certificate details | `GET` | `/api/ssl/v1/<sslId>` | Bearer | Full record: status, expiry, `certType`, term, requester, comments |
 
 All HTTP requests disable automatic redirects (`reqwest::redirect::Policy::none()`) to prevent silent base-URL drift.
 
 ### 9.4 Collection format mapping
 
-| `CollectFormat` | Sectigo `format=` value |
-|---|---|
-| `PemCert` | `x509` |
-| `PemChain` | `x509CO` |
-| `Pkcs7` | `pkcs7` |
+`CollectFormat` names artifacts by content; each plugin maps them to its vendor's
+token. Sectigo's tokens are not guessable from their names — `x509CO` is
+*certificate only* despite reading like a chain, and `x509IOR` reverses
+`x509IO` — so the mapping is pinned by a test in `ssl-toolbox-ca-sectigo`.
+
+| `CollectFormat` | CLI / IPC token | Sectigo `format` | Console wording |
+|---|---|---|---|
+| `CertificateOnlyPem` | `cert` | `pemco` | Certificate only, PEM encoded |
+| `CertificateIssuerAfterPem` | `cert-issuer-after` | `pemia` | Certificate (w/ issuer after), PEM encoded |
+| `CertificateChainPem` | `chain` | `pem` | Certificate (w/ chain), PEM encoded |
+| `Pkcs7Der` | `pkcs7` | `bin` | PKCS#7 |
+| `Pkcs7Pem` | `pkcs7-pem` | `base64` | PKCS#7, PEM encoded |
+| `IntermediatesRootPem` | `intermediates` | `x509IO` | Intermediate(s)/Root only, PEM encoded |
+| `RootIntermediatesPem` | `root-first` | `x509IOR` | Root/Intermediate(s) only, PEM encoded |
+
+Sectigo also documents `x509` and `x509CO`; neither appears in the console's
+Retrieve menu, so neither is exposed here.
+
+**Collection returns `Vec<u8>`, not `String`.** `Pkcs7Der` is binary. Decoding it
+as UTF-8 replaces every invalid byte with U+FFFD and writes a file that no longer
+parses — a corruption with no error attached to it. `CollectFormat::is_binary`
+marks the one format this applies to.
+
+**Historical defect.** Before this mapping existed, `chain` requested `x509CO`
+(certificate only) and `pkcs7` requested the literal string `pkcs7`, which
+Sectigo does not accept. Chain downloads silently produced bare leaves.
 
 ### 9.5 Term selection
 
@@ -544,6 +584,40 @@ The CSR PEM passed to `submit_csr` has its `-----BEGIN`/`-----END` lines strippe
 ### 9.7 Error surface and retries
 
 There is **no automatic retry**. Any non-2xx response returns an `anyhow::Error` with status and body text (status and body are also printed on submit errors; body is only printed on list/collect errors when `--debug` is set). Bearer token 401s propagate as errors — the caller re-runs the command to get a fresh token.
+
+---
+
+### 9.8 Search and pagination
+
+The list endpoint returns identifiers only — no status, no expiry — so a raw
+search result cannot answer "is this the live certificate?", which is the
+question a search is asked. `CertificateFilter::include_dates` (on by default)
+fills status and both dates in per row via `certificate_details`, in batches of
+`ENRICH_CONCURRENCY`, skipping any row whose fields the list already supplied.
+A row whose lookup fails is left partly blank rather than failing the search.
+
+That costs one extra request per result, which is why it is a flag and why the
+page size is the operator's lever over it. Opening a row still fetches the full
+record for the fields the summary does not carry.
+
+Pagination is `size` + `position`, capped at 200 by the plugin because the API
+rejects a larger page rather than truncating one. No total count is returned, so
+"there may be more" is inferred from a full page and reported as a maybe, never
+as a fact.
+
+`sslId` doubles as the collect identifier, which is what lets a search result
+flow directly into `collect_cert` without the operator transcribing anything.
+
+**Token reuse and timeouts.** A bearer token is cached for `TOKEN_LIFETIME`
+(4 minutes) so a burst of calls costs one authentication rather than one per
+request; `test_auth` deliberately bypasses the cache, since answering "do these
+credentials work?" with a cached answer would defeat it. Every CA request carries
+`REQUEST_TIMEOUT` (30s), satisfying §12.10 — before this, CA calls were the one
+place in the toolbox with no timeout at all.
+
+**Verification status.** Response parsing is pinned to committed fixtures in
+`crates/ssl-toolbox-ca-sectigo/tests/fixtures/`. The request shape has been
+exercised against a live tenant.
 
 ---
 
@@ -583,6 +657,28 @@ struct UiState {
 ### 10.3 Active profile
 
 A profile is a named configuration bundle for a specific cert subject (the value of `workflow.active_profile`). Selecting a profile scopes prompts to that profile's recent artifacts. Profile names are free-form strings; there is no registry of profile names outside what has been stored in state.
+
+### 10.3a Submitted CA requests
+
+A request ID is the only handle on an in-flight certificate order, it is long,
+and it arrives at the moment an operator is least likely to be writing things
+down. `UiState.ca_requests` keeps the last 50 submissions — ID, subject CN,
+description, profile, CSR path, timestamp — newest first, so the collect step can
+offer them back rather than sending the user to the CA console.
+
+Recording happens in `ssl-toolbox-ops`, not in a front-end, which is why an ID
+submitted from the desktop app is visible to `ssl-toolbox ca requests` and vice
+versa. Re-submitting a CSR after a CA-side error can return an ID already on the
+list; `push_ca_request` refreshes that entry in place rather than duplicating it.
+
+A persistence failure is swallowed: the order exists at the CA whether or not the
+note about it was written, and turning bookkeeping into a submission failure
+would invite a duplicate submission.
+
+**Known seam gap.** The recording path runs only after a successful CA
+submission, so it cannot be exercised at L0 without a live CA. The read path
+(`CaListRequests`) and the list's ordering, dedup, and truncation rules are
+covered; the write itself is not.
 
 ### 10.4 Recent jobs
 
@@ -625,6 +721,7 @@ Every capability is an `OpRequest` variant in `ssl-toolbox-ops`. Both the CLI an
 Front-ends differ only in two respects, both deliberate:
 
 - **Secret collection** — the CLI prompts on the terminal, the GUI collects in the webview. Both hand a `Secret` to ops.
+- **Input supply** — `InputSource` lets an inspection take a file path or pasted text. The GUI offers both, since a certificate as often arrives in a ticket as in a file; the CLI stays path-only, because a shell already has `<` and a competing flag would be the worse answer.
 - **Rendering** — the CLI renders ANSI text via `display.rs`, the GUI renders React components. Ops returns structured data to both.
 
 ---
@@ -643,11 +740,15 @@ Front-ends differ only in two respects, both deliberate:
 | Hostname mismatch going unnoticed | SAN check follows RFC 6125; CN fallback only when no SAN DNS entries exist |
 | Expired cert deployed unnoticed | `expiry_check` runs on every verify by default |
 | Weak ciphers deployed unnoticed | `--full-scan` enumerates negotiable ciphers per protocol |
-| Token/password leaked to disk | Secrets live in `.env` (gitignorable) or env vars; never written to `*.json`; state files are mode `0o600` |
+| Token/password leaked to disk | Secrets live in an encrypted vault (scrypt + AES-256-GCM), `.env`, or env vars; never written to `*.json`; state and vault files are mode `0o600` |
+| CA credential readable in a disk backup or synced home directory | The vault is encrypted at rest under a user passphrase; a copied file yields ciphertext |
+| Settings screen reporting a different identity than the one used | `resolve` and `status` share one resolution function, so displayed source and actual source cannot disagree |
 
 ### 11.2 What ssl-toolbox does NOT protect against
 
-- **Compromised host.** A root/administrator on the running host can read private keys, `.env`, state.json, and memory directly. Disk-level encryption and OS user isolation are the owner's responsibility.
+- **Compromised host.** A root/administrator on the running host can read private keys, `.env`, state.json, and memory directly. Disk-level encryption and OS user isolation are the owner's responsibility. The credential vault is no exception: once unlocked, the plaintext credentials live in process memory for the rest of that process's life, and anything that can read the process can read them.
+- **A forgotten vault passphrase.** There is no escrow, recovery key, or backdoor by design. The remedy is to reissue the credentials at the CA and run `ca login` again.
+- **An unlocked vault on an unattended desktop.** Unlocking lasts for the life of the process, not for a timeout. `ca lock` / the Lock button drop it early; nothing does so automatically.
 - **Malicious system libc / loader.** The vendored OpenSSL mitigates system-OpenSSL tampering but not libc, dynamic loader, or ptrace attacks.
 - **Key exfiltration via side channels.** No constant-time guarantees are made beyond what OpenSSL provides.
 - **Malicious input CSR / cert that exploits OpenSSL parsing.** The tool is only as safe as the vendored OpenSSL version it is built against.
@@ -657,10 +758,12 @@ Front-ends differ only in two respects, both deliberate:
 ### 11.3 Secret handling rules
 
 1. Secrets (`SCM_CLIENT_ID`, `SCM_CLIENT_SECRET`, key passphrases, PFX passphrases) must never be printed to stdout or stderr, including under `--debug`.
-2. Secrets must never be written to JSON configuration files. The CA plugin config file is for non-secret operational parameters only.
+2. Secrets must never be written to JSON configuration files. The CA plugin config file is for non-secret operational parameters only. The credential vault is a separate file, is not a configuration file, and holds ciphertext — endpoint settings and credentials travel through two distinct code paths precisely so no future "save everything" handler can merge them.
 3. Passphrases entered at interactive prompts are masked (`cliclack::password`).
 4. On Unix, state files containing recent paths and workflow memory are written with mode `0o600` inside a `0o700` directory.
 5. Error messages about missing secrets must name the env variable, never its expected value.
+6. The client ID is a secret for display purposes. Only its length crosses a front-end boundary — `CredentialStatus` carries `client_id_length` and deliberately has no field for the value, so no UI can render it and no log line can capture it.
+7. A vault write is atomic in effect: sealing happens before the file is touched, and the serialized plaintext buffer is zeroized whether sealing succeeded or failed.
 
 ### 11.4 Vendored OpenSSL trust boundary
 

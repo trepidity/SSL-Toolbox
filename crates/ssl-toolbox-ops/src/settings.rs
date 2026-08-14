@@ -1,5 +1,5 @@
 use crate::audit::ValidationAuditEntry;
-use crate::workflow::{JobRecord, WorkflowMemory};
+use crate::workflow::{CaRequestRecord, JobRecord, WorkflowMemory};
 use serde::{Deserialize, Serialize};
 use ssl_toolbox_core::CsrDefaults;
 use std::collections::BTreeMap;
@@ -26,6 +26,9 @@ pub struct UiState {
     pub workflow: WorkflowMemory,
     #[serde(default)]
     pub recent_jobs: Vec<JobRecord>,
+    /// CSRs submitted to a CA, newest first.
+    #[serde(default)]
+    pub ca_requests: Vec<CaRequestRecord>,
 }
 
 impl UiState {
@@ -81,6 +84,29 @@ pub fn append_validation_log_entry(entry: &ValidationAuditEntry) -> anyhow::Resu
     append_validation_log_entry_to(home_dir(), entry)
 }
 
+/// Where the encrypted CA credential vault lives.
+///
+/// User scope only — unlike `config.json`, there is no project-level override.
+/// A vault checked into a repository or dropped in a shared working directory
+/// is a credential-sharing accident waiting to happen, so the file has exactly
+/// one home per user (ARCHITECTURE.md §3.1).
+pub fn credentials_vault_path() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".ssl-toolbox").join("credentials.vault"))
+}
+
+/// Write `contents` to `path` with owner-only permissions, creating the
+/// enclosing `.ssl-toolbox` directory as `0o700` if needed.
+///
+/// Exposed for the credential vault, which is written outside this module but
+/// must land with exactly the same permissions as `state.json`.
+pub fn write_private_file_at(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        set_private_dir_permissions(parent)?;
+    }
+    write_private_file(path, contents)
+}
+
 /// Load a CA plugin config file by name (e.g., "sectigo") from the config directories.
 /// Merges files in order: ~/.ssl-toolbox/<name>.json < ./.ssl-toolbox/<name>.json
 #[cfg(feature = "sectigo")]
@@ -114,6 +140,41 @@ pub fn load_ca_config<T: serde::de::DeserializeOwned + Default>(name: &str) -> T
         Some(value) => serde_json::from_value(value).unwrap_or_default(),
         None => T::default(),
     }
+}
+
+/// Write a CA plugin config file to **user** scope (`~/.ssl-toolbox/<name>.json`).
+///
+/// Deliberately not project scope: a settings screen edits "my configuration",
+/// and writing into whatever directory the app happened to launch from would
+/// scatter config files across the filesystem. A project-level file still
+/// overrides this one on read — see [`ca_config_override_path`], which lets a
+/// front-end warn when a save is about to be shadowed.
+#[cfg(feature = "sectigo")]
+pub fn save_ca_config<T: serde::Serialize>(name: &str, config: &T) -> anyhow::Result<PathBuf> {
+    let home = home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine a home directory to save settings"))?;
+    let path = home.join(".ssl-toolbox").join(format!("{name}.json"));
+    let mut contents = serde_json::to_vec_pretty(config)?;
+    contents.push(b'\n');
+    write_private_file_at(&path, &contents)?;
+    Ok(path)
+}
+
+/// Where a CA plugin config file is written by a settings screen.
+#[cfg(feature = "sectigo")]
+pub fn ca_config_path(name: &str) -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".ssl-toolbox").join(format!("{name}.json")))
+}
+
+/// The project-scope CA config file, when one exists in the current directory.
+///
+/// Its presence means values saved to user scope will not take effect, which is
+/// correct per the layering rules and deeply confusing if unexplained.
+#[cfg(feature = "sectigo")]
+pub fn ca_config_override_path(name: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(".ssl-toolbox").join(format!("{name}.json"));
+    path.exists()
+        .then(|| std::fs::canonicalize(&path).unwrap_or(path))
 }
 
 fn config_dirs() -> Vec<PathBuf> {

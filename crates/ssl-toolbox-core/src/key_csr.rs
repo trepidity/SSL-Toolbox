@@ -79,9 +79,30 @@ pub fn generate_key_and_csr(
 /// Extract CN and SANs from a CSR file (PEM or DER).
 pub fn extract_csr_details(csr_file: &str) -> Result<(String, Vec<String>)> {
     let input_bytes = fs::read(csr_file).context("Failed to read CSR file")?;
+    extract_csr_details_from_bytes(&input_bytes)
+}
 
-    let req = X509Req::from_pem(&input_bytes)
-        .or_else(|_| X509Req::from_der(&input_bytes))
+/// Re-emit a CSR as PEM text, whatever encoding it arrived in.
+///
+/// Exists so the desktop app can offer "copy this request" against a CSR that
+/// was loaded from a DER file or pasted without its armour — the operator needs
+/// something they can hand to a CA, not the bytes they happened to supply.
+pub fn csr_to_pem_text(input_bytes: &[u8]) -> Result<String> {
+    let req = X509Req::from_pem(input_bytes)
+        .or_else(|_| X509Req::from_der(input_bytes))
+        .context("Failed to parse CSR")?;
+    let pem = req.to_pem().context("Failed to re-encode the CSR as PEM")?;
+    String::from_utf8(pem).context("CSR PEM was not valid UTF-8")
+}
+
+/// Extract CN and SANs from CSR bytes already in hand.
+///
+/// Split out from [`extract_csr_details`] so a request pasted into the desktop
+/// app takes the same parsing path as one read from disk — two parsers would be
+/// two sets of behaviour to keep in agreement.
+pub fn extract_csr_details_from_bytes(input_bytes: &[u8]) -> Result<(String, Vec<String>)> {
+    let req = X509Req::from_pem(input_bytes)
+        .or_else(|_| X509Req::from_der(input_bytes))
         .context("Failed to parse CSR")?;
 
     let subject = req.subject_name();

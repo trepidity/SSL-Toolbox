@@ -808,3 +808,60 @@ button.ghost {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* File-vs-paste switch on the inspect screens. Small and quiet: it selects an
+   input method, it is not a navigation control. */
+.source-toggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-input);
+}
+
+.source-toggle .tab {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.source-toggle .tab:hover {
+  color: var(--text-primary);
+}
+
+.source-toggle .tab.is-active {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+/* Expandable search results. The row is a button because opening it fetches
+   details — a click target that does work should be announced as one. */
+.row-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-button:hover {
+  background: var(--bg-raised);
+}
+
+.row-detail {
+  padding: 4px 13px 16px 13px;
+  border-bottom: 1px solid var(--border-subtle);
+}

@@ -52,6 +52,40 @@ pub fn detect_format(data: &[u8]) -> CertFormat {
     CertFormat::Unknown
 }
 
+/// Turn text a user pasted into bytes a parser will accept.
+///
+/// Three things arrive in a paste box, and all three are the same artifact:
+/// full PEM with armour, PEM with the armour lost to a ticket system's
+/// formatting, and the bare base64 body someone copied out of the middle of a
+/// certificate. Only the first parses as-is, so the other two are decoded to
+/// DER here rather than being rejected as malformed.
+///
+/// Returns the input unchanged when it is already armoured — `X509::from_pem`
+/// handles that, including multi-certificate bundles, which base64-decoding
+/// would flatten to just the first entry.
+pub fn pasted_to_bytes(text: &str) -> Result<Vec<u8>> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow::anyhow!("Nothing was pasted"));
+    }
+
+    if trimmed.contains("-----BEGIN") {
+        return Ok(trimmed.as_bytes().to_vec());
+    }
+
+    let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    if !compact
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    {
+        return Err(anyhow::anyhow!(
+            "Pasted text is neither PEM nor base64. Paste the certificate including its -----BEGIN----- line, or just the base64 body."
+        ));
+    }
+
+    base64_decode(&compact).ok_or_else(|| anyhow::anyhow!("Pasted text is not valid base64"))
+}
+
 fn is_pkcs7_pem(data: &[u8]) -> bool {
     if let Ok(text) = std::str::from_utf8(data) {
         text.contains("-----BEGIN PKCS7-----") || text.contains("-----BEGIN CMS-----")

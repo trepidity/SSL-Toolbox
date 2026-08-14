@@ -1,7 +1,8 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { CertDetails, CertValidation, SanKind } from "./lib/types";
+import type { CertDetails, CertValidation, InputSource, SanKind } from "./lib/types";
 import { SAN_KINDS } from "./lib/types";
 
 /** Label / placeholder for a SAN type; falls back to DNS for an unknown value. */
@@ -129,6 +130,107 @@ export function SecretField({
         onChange={(event) => onChange(event.target.value)}
       />
     </Field>
+  );
+}
+
+/**
+ * A file path or a paste box, whichever the artifact arrived as.
+ *
+ * Certificates reach an operator two ways and only one of them is a file: the
+ * other is a block of base64 in a ticket, an email, or a chat message. Saving
+ * that to a temporary file first is a step with no purpose, so this control
+ * accepts either and hands ops a tagged `InputSource`.
+ */
+export function SourceField({
+  label,
+  hint,
+  value,
+  onChange,
+  placeholder,
+  filters,
+  pasteHint = "Paste PEM, or just the base64 body without its -----BEGIN----- line.",
+}: {
+  label: string;
+  hint?: string;
+  value: InputSource;
+  onChange: (next: InputSource) => void;
+  placeholder?: string;
+  filters?: { name: string; extensions: string[] }[];
+  pasteHint?: string;
+}) {
+  return (
+    <div className="field">
+      <div className="source-toggle">
+        <button
+          type="button"
+          className={value.kind === "path" ? "tab is-active" : "tab"}
+          aria-pressed={value.kind === "path"}
+          onClick={() => onChange({ kind: "path", path: "" })}
+        >
+          File
+        </button>
+        <button
+          type="button"
+          className={value.kind === "text" ? "tab is-active" : "tab"}
+          aria-pressed={value.kind === "text"}
+          onClick={() => onChange({ kind: "text", text: "" })}
+        >
+          Paste
+        </button>
+      </div>
+
+      {value.kind === "path" ? (
+        <PathField
+          label={label}
+          hint={hint}
+          value={value.path}
+          onChange={(path) => onChange({ kind: "path", path })}
+          placeholder={placeholder}
+          filters={filters}
+        />
+      ) : (
+        <Field label={label} hint={pasteHint}>
+          <textarea
+            className="mono"
+            rows={10}
+            spellCheck={false}
+            value={value.text}
+            placeholder={"-----BEGIN CERTIFICATE-----\nMIID…"}
+            onChange={(event) => onChange({ kind: "text", text: event.target.value })}
+          />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+/** True when a source has something worth submitting. */
+export function sourceIsReady(source: InputSource): boolean {
+  return source.kind === "path" ? source.path.length > 0 : source.text.trim().length > 0;
+}
+
+/**
+ * A button that copies text and confirms it did.
+ *
+ * Copy actions are invisible when they work and equally invisible when they
+ * fail, so the label reports which happened.
+ */
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function copy() {
+    try {
+      await writeText(text);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+  }
+
+  return (
+    <button type="button" className="ghost" onClick={copy}>
+      {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
+    </button>
   );
 }
 
