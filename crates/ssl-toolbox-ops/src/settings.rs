@@ -372,7 +372,10 @@ pub fn init_config(dir: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_HOME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn resolves_relative_paths_against_base_dir() {
@@ -393,10 +396,12 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time before unix epoch")
             .as_nanos();
+        let sequence = TEMP_HOME_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "ssl-toolbox-settings-{}-{}",
+            "ssl-toolbox-settings-{}-{}-{}",
             std::process::id(),
-            nonce
+            nonce,
+            sequence
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp home");

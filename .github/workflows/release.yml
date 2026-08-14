@@ -89,6 +89,45 @@ jobs:
           name: ssl-toolbox-v${{ env.PACKAGE_VERSION }}-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
+  gui-windows:
+    name: Build Windows desktop installer
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/ssl-toolbox-gui/ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-gui
+
+      - name: Install desktop build tools
+        shell: pwsh
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix crates/ssl-toolbox-gui/ui
+
+      - name: Build Windows desktop installers
+        working-directory: crates/ssl-toolbox-gui
+        run: cargo tauri build --bundles msi,nsis
+
+      - name: Upload Windows desktop installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: ssl-toolbox-gui-v${{ needs.prepare.outputs.package_version }}-windows
+          path: |
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
   prepare:
     name: Resolve package version
     runs-on: ubuntu-latest
@@ -121,7 +160,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [prepare, build]
+    needs: [prepare, build, gui-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -135,7 +174,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum ssl-toolbox-* > sha256sums.txt
+          sha256sum * > sha256sums.txt
           cat sha256sums.txt
 
       - name: Create release
@@ -146,4 +185,6 @@ jobs:
           files: |
             artifacts/ssl-toolbox-v${{ needs.prepare.outputs.package_version }}-*.tar.gz
             artifacts/ssl-toolbox-v${{ needs.prepare.outputs.package_version }}-*.zip
+            artifacts/*.msi
+            artifacts/*-setup.exe
             artifacts/sha256sums.txt

@@ -8,6 +8,16 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.1.2 — 2026-08-13
+
+### fix: publish Windows desktop installers
+
+The release workflow now builds the Tauri desktop application on Windows and
+attaches both MSI and NSIS installers to every tagged release. Their checksums
+are included alongside the CLI archives.
+
+---
+
 ## v2.1.1 — 2026-08-13
 
 ### feat: verify SQL Server certificates
