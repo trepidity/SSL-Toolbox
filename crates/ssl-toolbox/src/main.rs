@@ -643,6 +643,7 @@ fn report(result: OpResult) {
             csr_path,
             key_path,
             key_created,
+            ..
         } => {
             if key_created {
                 println!("Success: Generated {key_path} and {csr_path}");

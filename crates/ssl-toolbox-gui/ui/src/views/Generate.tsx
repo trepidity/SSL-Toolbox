@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   Banner,
   Checkbox,
@@ -101,8 +102,10 @@ export function GenerateCsrView() {
   const [key, setKey] = useState("");
   const [csr, setCsr] = useState("");
   const [createKey, setCreateKey] = useState(true);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const keyPassword = useSecret();
   const op = useOp();
+  const csrOutcome = op.outcome?.outcome === "csrGenerated" ? op.outcome : null;
 
   function onConfChange(next: string) {
     setConf(next);
@@ -112,6 +115,7 @@ export function GenerateCsrView() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    setCopyState("idle");
     try {
       await op.run({
         op: "generateCsr",
@@ -123,6 +127,15 @@ export function GenerateCsrView() {
       });
     } finally {
       clearSecrets(keyPassword);
+    }
+  }
+
+  async function copyCsr(csrPem: string) {
+    try {
+      await writeText(csrPem);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
     }
   }
 
@@ -180,24 +193,44 @@ export function GenerateCsrView() {
       </div>
       <div className="pane">
         {op.error ? <Banner tone="danger" title="CSR generation failed">{op.error}</Banner> : null}
-        {op.outcome?.outcome === "csrGenerated" ? (
+        {csrOutcome ? (
           <>
-            <Banner tone="ok" title="CSR generated">
-              <code>{op.outcome.csrPath}</code>
+            <Banner
+              tone="ok"
+              title="CSR generated"
+              aside={
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => copyCsr(csrOutcome.csrPem)}
+                >
+                  {copyState === "copied" ? "Copied" : "Copy CSR"}
+                </button>
+              }
+            >
+              <code>{csrOutcome.csrPath}</code>
             </Banner>
             <Panel title="Private key">
               <div className="small">
-                {op.outcome.keyCreated ? (
+                {csrOutcome.keyCreated ? (
                   <>
-                    A new encrypted key was created at <code className="mono">{op.outcome.keyPath}</code>.
+                    A new encrypted key was created at <code className="mono">{csrOutcome.keyPath}</code>.
                     Back it up — the CSR is worthless without it.
                   </>
                 ) : (
                   <>
-                    Reused the existing key at <code className="mono">{op.outcome.keyPath}</code>.
+                    Reused the existing key at <code className="mono">{csrOutcome.keyPath}</code>.
                   </>
                 )}
               </div>
+            </Panel>
+            <Panel title="Certificate signing request">
+              <pre className="pem-output">{csrOutcome.csrPem}</pre>
+              {copyState === "failed" ? (
+                <span className="hint copy-error" role="status">
+                  Could not copy the CSR. Select the text and copy it manually.
+                </span>
+              ) : null}
             </Panel>
           </>
         ) : null}

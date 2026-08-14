@@ -8,6 +8,15 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.1.4 — 2026-08-13
+
+### feat: copy a newly generated CSR
+
+The CSR success result now shows its PEM text and a one-click Copy CSR action
+that writes the complete request to the native system clipboard.
+
+---
+
 ## v2.1.3 — 2026-08-13
 
 ### fix: reliably publish release artifacts

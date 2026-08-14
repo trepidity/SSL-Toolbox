@@ -350,7 +350,13 @@ export interface CertProfile {
 /** Discriminated by `outcome`, matching serde's `#[serde(tag = "outcome")]`. */
 export type OpOutcome =
   | { outcome: "keyCreated"; path: string }
-  | { outcome: "csrGenerated"; csrPath: string; keyPath: string; keyCreated: boolean }
+  | {
+      outcome: "csrGenerated";
+      csrPath: string;
+      csrPem: string;
+      keyPath: string;
+      keyCreated: boolean;
+    }
   | { outcome: "pfxCreated"; path: string; legacy: boolean }
   | { outcome: "configWritten"; path: string }
   | { outcome: "configLoaded"; path: string; text: string; summary: ConfigSummary }

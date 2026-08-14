@@ -13,6 +13,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use ssl_toolbox_core::{
@@ -199,6 +200,9 @@ pub enum OpOutcome {
     #[serde(rename_all = "camelCase")]
     CsrGenerated {
         csr_path: String,
+        /// PEM text returned to the desktop so the generated request can be
+        /// copied immediately without reading arbitrary local files.
+        csr_pem: String,
         key_path: String,
         /// True when the key did not exist and was created as part of this op.
         key_created: bool,
@@ -346,6 +350,9 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
                 )?;
             }
 
+            let csr_pem = fs::read_to_string(&csr)
+                .with_context(|| format!("Could not read generated CSR {csr}"))?;
+
             Ok(OpResult {
                 job: job(ActionKind::Generate, format!("Generate CSR {csr}"))
                     .input("conf", &conf)
@@ -354,6 +361,7 @@ pub fn run(request: OpRequest) -> Result<OpResult> {
                     .build(),
                 outcome: OpOutcome::CsrGenerated {
                     csr_path: csr,
+                    csr_pem,
                     key_path: key,
                     key_created: !key_exists,
                 },

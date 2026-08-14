@@ -100,6 +100,15 @@ fn generating_a_csr_may_create_the_key_when_explicitly_allowed() {
     })
     .expect("key creation was explicitly allowed");
 
+    // IPC contract: the desktop UI needs the completed request's PEM text so
+    // users can copy it immediately without reopening a file dialog.
+    let outcome_wire = serde_json::to_value(&result.outcome).expect("outcome should serialize");
+    assert_eq!(
+        outcome_wire["csrPem"],
+        fs::read_to_string(&csr).expect("CSR should exist"),
+        "the generated CSR outcome must return the exact PEM saved on disk"
+    );
+
     match result.outcome {
         OpOutcome::CsrGenerated { key_created, .. } => assert!(
             key_created,
@@ -356,6 +365,9 @@ fn simple_outcomes_serialize_with_the_keys_the_ui_reads() {
 
     let csr = serde_json::to_value(OpOutcome::CsrGenerated {
         csr_path: "server.csr".into(),
+        csr_pem:
+            "-----BEGIN CERTIFICATE REQUEST-----\nexample\n-----END CERTIFICATE REQUEST-----\n"
+                .into(),
         key_path: "server.key".into(),
         key_created: true,
     })
@@ -363,6 +375,10 @@ fn simple_outcomes_serialize_with_the_keys_the_ui_reads() {
 
     assert_eq!(csr["outcome"], "csrGenerated");
     assert_eq!(csr["csrPath"], "server.csr");
+    assert_eq!(
+        csr["csrPem"],
+        "-----BEGIN CERTIFICATE REQUEST-----\nexample\n-----END CERTIFICATE REQUEST-----\n"
+    );
     assert_eq!(csr["keyPath"], "server.key");
     assert_eq!(csr["keyCreated"], true);
 }

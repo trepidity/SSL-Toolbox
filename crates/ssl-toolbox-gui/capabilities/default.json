@@ -1,7 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The only capability the SSL Toolbox webview needs: the two file-dialog commands behind every Browse button. Custom commands declared in generate_handler! are not ACL-gated, so nothing else has to be granted here.",
+  "description": "The desktop webview can open and save files through native dialogs and copy a completed CSR to the system clipboard. Custom commands declared in generate_handler! are not ACL-gated.",
   "windows": ["main"],
-  "permissions": ["dialog:allow-open", "dialog:allow-save"]
+  "permissions": [
+    "clipboard-manager:allow-write-text",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
 }

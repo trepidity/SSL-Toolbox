@@ -271,10 +271,12 @@ export function Badge({
 export function Banner({
   tone,
   title,
+  aside,
   children,
 }: {
   tone: "ok" | "warn" | "danger";
   title: string;
+  aside?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -283,6 +285,7 @@ export function Banner({
         <div className="banner-title">{title}</div>
         {children ? <div>{children}</div> : null}
       </div>
+      {aside}
     </div>
   );
 }
