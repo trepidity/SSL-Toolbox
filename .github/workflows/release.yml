@@ -174,7 +174,12 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum * > sha256sums.txt
+          find . -type f \( \
+            -name 'ssl-toolbox-*.tar.gz' -o \
+            -name 'ssl-toolbox-*.zip' -o \
+            -name '*.msi' -o \
+            -name '*-setup.exe' \
+          \) -print0 | sort -z | xargs -0 sha256sum > sha256sums.txt
           cat sha256sums.txt
 
       - name: Create release
@@ -185,6 +190,6 @@ jobs:
           files: |
             artifacts/ssl-toolbox-v${{ needs.prepare.outputs.package_version }}-*.tar.gz
             artifacts/ssl-toolbox-v${{ needs.prepare.outputs.package_version }}-*.zip
-            artifacts/*.msi
-            artifacts/*-setup.exe
+            artifacts/**/*.msi
+            artifacts/**/*-setup.exe
             artifacts/sha256sums.txt

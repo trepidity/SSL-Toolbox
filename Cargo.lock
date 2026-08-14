@@ -3496,7 +3496,7 @@ dependencies = [
 
 [[package]]
 name = "ssl-toolbox"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "ssl-toolbox-ca"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "anyhow",
  "serde",
@@ -3521,7 +3521,7 @@ dependencies = [
 
 [[package]]
 name = "ssl-toolbox-ca-sectigo"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "anyhow",
  "dotenvy",
@@ -3533,7 +3533,7 @@ dependencies = [
 
 [[package]]
 name = "ssl-toolbox-core"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "anyhow",
  "openssl",
@@ -3544,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "ssl-toolbox-gui"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "anyhow",
  "serde",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "ssl-toolbox-ops"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
  "anyhow",
  "serde",

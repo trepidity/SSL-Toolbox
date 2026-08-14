@@ -8,6 +8,15 @@ All notable changes to ssl-toolbox are documented here.
 
 ---
 
+## v2.1.3 — 2026-08-13
+
+### fix: reliably publish release artifacts
+
+Release checksums now discover the CLI archives and Windows installers even
+when GitHub Actions stores downloaded artifacts in subdirectories.
+
+---
+
 ## v2.1.2 — 2026-08-13
 
 ### fix: publish Windows desktop installers
